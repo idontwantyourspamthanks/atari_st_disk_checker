@@ -99,6 +99,7 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 					<span class="finding__kind">{{
 						finding.kind === 'signature' ? 'VIRUS'
 						: finding.kind === 'protector' ? 'PROT'
+						: finding.kind === 'sandbox' ? 'EXEC'
 						: 'FLAG'
 					}}</span>
 					<span class="finding__name">{{ finding.name }}</span>
@@ -258,6 +259,7 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 .finding--info    { background: rgba(42, 111, 151, 0.08); }
 
 .finding--protector .finding__kind { background: #2a6f97; color: #fff; }
+.finding--sandbox .finding__kind { background: #5a4a8a; color: #fff; }
 
 .finding__head {
 	display: flex;

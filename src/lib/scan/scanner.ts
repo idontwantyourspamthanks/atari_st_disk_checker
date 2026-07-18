@@ -11,6 +11,7 @@ import {
 	PROTECTOR_EXPECTED_HEURISTIC_IDS,
 	type HeuristicFinding,
 } from './heuristics'
+import { runBootSandbox, type SandboxResult } from './sandbox/bootSandbox'
 import { matchSignatures, type SignatureMatch } from './signatures'
 import { matchProtectors } from './protectors'
 import type { ProtectorMatch } from './protectors'
@@ -35,8 +36,8 @@ export type InfectionStatus =
 	| 'immunized'          // Signature matches but boot is NOT executable — likely a vaccinated clean disk
 	| 'unclear'            // Anything else
 
-export interface ScanFinding {
-	kind: 'signature' | 'protector' | 'heuristic'
+export type ScanFinding = {
+	kind: 'signature' | 'protector' | 'heuristic' | 'sandbox'
 	/** Display name — virus/protector name, or heuristic headline. */
 	name: string
 	detail: string
@@ -111,6 +112,7 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 	const signatureMatches = matchSignatures(boot)
 	const protectorMatches = matchProtectors(boot)
 	let heuristicFindings = runHeuristics(boot)
+	let sandboxFindings = sandboxToFindings(runBootSandbox(boot))
 
 	const infectionStatus = computeInfectionStatus(executable, boot)
 	const liveVirus = signatureMatches.length > 0 && infectionStatus !== 'immunized'
@@ -119,12 +121,14 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 	// generic boot-code heuristics so the card isn't double-alarmed.
 	if (protectorMatches.length > 0 && !liveVirus) {
 		heuristicFindings = demoteBootCodeHeuristics(heuristicFindings)
+		sandboxFindings = demoteSandboxFindings(sandboxFindings)
 	}
 
 	const findings: ScanFinding[] = [
 		...signatureMatches.map(m => toSignatureFinding(m, boot.length, infectionStatus)),
 		...protectorMatches.map(m => toProtectorFinding(m, boot.length)),
 		...heuristicFindings.map(h => toHeuristicFinding(h)),
+		...sandboxFindings,
 	]
 
 	synthesise(findings, signatureMatches, heuristicFindings, boot, protectorMatches)
@@ -133,6 +137,7 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 		signatureMatches,
 		protectorMatches,
 		heuristicFindings,
+		sandboxFindings,
 		boot,
 		executable,
 	)
@@ -279,6 +284,61 @@ function demoteBootCodeHeuristics(heuristics: HeuristicFinding[]): HeuristicFind
 	})
 }
 
+function demoteSandboxFindings(findings: ScanFinding[]): ScanFinding[] {
+	return findings.map(f => ({
+		...f,
+		severity: 'info' as const,
+		detail:
+			f.detail +
+			' Consistent with a known boot protector — see protector finding above.',
+	}))
+}
+
+/** Turn sandbox side-effects into scan findings. */
+export function sandboxToFindings(result: SandboxResult): ScanFinding[] {
+	if (!result.ran) return []
+
+	const out: ScanFinding[] = []
+
+	if (result.resetProofMagic || result.resetProofVector) {
+		const parts: string[] = []
+		if (result.resetProofMagic) {
+			parts.push('wrote π ($31415926) to resvalid ($426)')
+		}
+		if (result.resetProofVector) {
+			const rv = result.writes.find(w => w.addr === 0x042a)
+			parts.push(
+				rv
+					? `wrote resvector ($42A) = $${rv.value.toString(16)}`
+					: 'wrote resvector ($42A)',
+			)
+		}
+		out.push({
+			kind: 'sandbox',
+			name: 'Sandbox: reset-proof install',
+			detail:
+				`While executing the boot sector, the sandbox observed: ${parts.join('; ')}. ` +
+				`That is how code stays resident across a warm reset. ` +
+				`Ran ${result.instructions} instructions (${result.haltReason}).`,
+			severity: 'high',
+		})
+	}
+
+	if (result.hooks.length > 0) {
+		out.push({
+			kind: 'sandbox',
+			name: 'Sandbox: system vector hook',
+			detail:
+				`Boot code wrote to ${result.hooks.join(', ')} during sandbox execution ` +
+				`(${result.instructions} instructions, ${result.haltReason}). ` +
+				`Typical of memory-resident boot viruses (and some protectors / loaders).`,
+			severity: 'high',
+		})
+	}
+
+	return out
+}
+
 // Exported for direct unit testing of the family-attribution path.
 export const FAMILY_PATTERNS: ReadonlyArray<{ name: string; offset: number; bytes: number[] }> = [
 	// Empty on purpose — shared BRA offsets also appear on protectors.
@@ -366,6 +426,7 @@ function computeStatus(
 	signatures: SignatureMatch[],
 	protectors: ProtectorMatch[],
 	heuristics: HeuristicFinding[],
+	sandboxFindings: ScanFinding[],
 	boot: Uint8Array,
 	executable: boolean,
 ): ScanStatus {
@@ -378,8 +439,12 @@ function computeStatus(
 	if (protectors.length > 0) {
 		return 'protected'
 	}
-	const hasHigh = heuristics.some(h => h.severity === 'high')
-	const hasMedium = heuristics.some(h => h.severity === 'medium')
+	const hasHigh =
+		heuristics.some(h => h.severity === 'high') ||
+		sandboxFindings.some(f => f.severity === 'high')
+	const hasMedium =
+		heuristics.some(h => h.severity === 'medium') ||
+		sandboxFindings.some(f => f.severity === 'medium')
 	if (hasHigh || hasMedium) return 'suspicious'
 	return 'clean'
 }

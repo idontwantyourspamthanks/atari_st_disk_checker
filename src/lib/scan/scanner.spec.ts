@@ -103,6 +103,22 @@ describe('scanImage — virus detection', () => {
 		expect(report.findings.some(f => f.kind === 'signature' && f.name === 'Ghost A')).toBe(true)
 		expect(report.findings.some(f => f.kind === 'heuristic')).toBe(true)
 	})
+
+	it('emits sandbox findings for the real Ghost A corpus image', () => {
+		const ghostPath = '/home/ryan/Code/diskcheck/diskimages/virus ghost a 0706 Copia MONKEY1.st'
+		let buf: Buffer
+		try {
+			buf = readFileSync(ghostPath)
+		} catch {
+			return
+		}
+
+		const report = scanImage(new Uint8Array(buf), 'ghost.st')
+		const sandbox = report.findings.filter(f => f.kind === 'sandbox')
+		expect(sandbox.some(f => f.name.includes('reset-proof'))).toBe(true)
+		expect(sandbox.some(f => f.name.includes('vector hook'))).toBe(true)
+		expect(report.status).toBe('infected')
+	})
 })
 
 describe('scanImage — error handling', () => {
