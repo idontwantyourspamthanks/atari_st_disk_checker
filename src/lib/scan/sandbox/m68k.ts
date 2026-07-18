@@ -384,10 +384,12 @@ export class M68k {
 		}
 
 		// MOVE.B / MOVE.W / MOVE.L / MOVEA.W / MOVEA.L
+		// IMPORTANT: only opcodes 1xxx/2xxx/3xxx — using (op>>12)&3 falsely
+		// matches 5xxx/6xxx/7xxx/9xxx/Bxxx/Dxxx (ADDQ, Bcc, SUB, CMP, ADD…).
 		{
-			const sizeBits = (op >> 12) & 3
-			if (sizeBits === 1 || sizeBits === 3 || sizeBits === 2) {
-				const size: 1 | 2 | 4 = sizeBits === 1 ? 1 : sizeBits === 3 ? 2 : 4
+			const hiNibble = (op >> 12) & 0xf
+			if (hiNibble === 1 || hiNibble === 2 || hiNibble === 3) {
+				const size: 1 | 2 | 4 = hiNibble === 1 ? 1 : hiNibble === 3 ? 2 : 4
 				const dstReg = (op >> 9) & 7
 				const dstMode = (op >> 6) & 7
 				const srcMode = (op >> 3) & 7
@@ -560,10 +562,11 @@ export class M68k {
 
 		// AND / OR / EOR immediate to CCR/SR — skip rare
 		// ANDI / ORI / EORI / SUBI / ADDI / CMPI
-		if ((op & 0xf000) === 0x0000 && (op & 0x0e00) !== 0) {
+		if ((op & 0xf000) === 0x0000) {
 			const kind = (op >> 9) & 7
 			const sizeBits = (op >> 6) & 3
-			if (sizeBits <= 2 && kind >= 0 && kind <= 6 && kind !== 4) {
+			// kind 4 = BTST/BCHG/BCLR/BSET with immediate — not handled here
+			if (sizeBits <= 2 && kind !== 4 && kind <= 6) {
 				const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
 				const imm =
 					size === 1 ? this.fetch16() & 0xff : size === 2 ? this.fetch16() : this.fetch32()

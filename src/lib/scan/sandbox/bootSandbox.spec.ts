@@ -7,8 +7,7 @@ import {
 	ST_BOOT_SECTOR_EXE_SUM,
 } from '../bootSector'
 
-const GHOST_PATH =
-	'/home/ryan/Code/diskcheck/diskimages/virus ghost a 0706 Copia MONKEY1.st'
+const DISKIMAGES = '/home/ryan/Code/diskcheck/diskimages'
 
 function fixChecksum(boot: Uint8Array): void {
 	let sum = 0
@@ -36,6 +35,12 @@ function trivialRtsBoot(): Uint8Array {
 	return boot
 }
 
+function loadVirus(name: string): Uint8Array | null {
+	const path = `${DISKIMAGES}/${name}`
+	if (!existsSync(path)) return null
+	return getBootSector(new Uint8Array(readFileSync(path)))
+}
+
 describe('runBootSandbox', () => {
 	it('does not run a non-executable boot sector', () => {
 		const boot = new Uint8Array(512)
@@ -52,21 +57,57 @@ describe('runBootSandbox', () => {
 	})
 
 	it('observes Ghost A installing reset-proof residency + hdv_bpb', function () {
-		if (!existsSync(GHOST_PATH)) {
+		const boot = loadVirus('virus ghost a 0706 Copia MONKEY1.st')
+		if (!boot) {
 			this.skip()
 			return
 		}
 
-		const image = new Uint8Array(readFileSync(GHOST_PATH))
-		const boot = getBootSector(image)
 		const result = runBootSandbox(boot)
-
-		expect(result.ran).toBe(true)
 		expect(result.haltReason).toBe('return')
-		expect(result.instructions).toBeGreaterThan(0)
 		expect(result.resetProofMagic).toBe(true)
 		expect(result.resetProofVector).toBe(true)
 		expect(result.hooks).toContain('hdv_bpb')
 		expect(result.writes.some(w => w.addr === 0x0426 && w.value === 0x31415926)).toBe(true)
+	})
+
+	it('observes Finland (zero-disguise entry) installing reset-proof + hdv_bpb', function () {
+		const boot = loadVirus('virus finland virus H013.MSA')
+		if (!boot) {
+			this.skip()
+			return
+		}
+
+		const result = runBootSandbox(boot)
+		expect(result.haltReason).toBe('return')
+		expect(result.resetProofMagic).toBe(true)
+		expect(result.resetProofVector).toBe(true)
+		expect(result.hooks).toContain('hdv_bpb')
+	})
+
+	it('observes Goblin installing reset-proof residency + hdv_bpb', function () {
+		const boot = loadVirus('virus goblin a H456.MSA')
+		if (!boot) {
+			this.skip()
+			return
+		}
+
+		const result = runBootSandbox(boot)
+		expect(result.haltReason).toBe('return')
+		expect(result.resetProofMagic).toBe(true)
+		expect(result.resetProofVector).toBe(true)
+		expect(result.hooks).toContain('hdv_bpb')
+	})
+
+	it('observes Signum hooking hdv_bpb', function () {
+		const boot = loadVirus('virus signum pbl a H087.MSA')
+		if (!boot) {
+			this.skip()
+			return
+		}
+
+		const result = runBootSandbox(boot)
+		expect(result.haltReason).toBe('return')
+		expect(result.hooks).toContain('hdv_bpb')
 	})
 })

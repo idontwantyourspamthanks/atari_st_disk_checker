@@ -43,7 +43,13 @@ export interface SandboxResult {
 const RESVALID_PI = 0x31415926
 const DEFAULT_LIMIT = 50_000
 const MEM_SIZE = 0x10_0000 // 1 MiB
-const BOOT_LOAD_ADDR = 0x000000
+/**
+ * Load address for the boot sector. Must NOT be $0 — the exception vector
+ * table and TOS system variables live in low RAM, and zeroing trap stubs
+ * would overwrite the boot image (Goblin keeps live code/data around $80).
+ * $4000 is a plausible floppy-buffer style address above _membot.
+ */
+const BOOT_LOAD_ADDR = 0x00004000
 const RETURN_SENTINEL = 0x00e00000 // fake "back in TOS" address
 const STACK_TOP = 0x00080000
 
@@ -85,13 +91,20 @@ export function runBootSandbox(
 	}
 
 	const mem = new Uint8Array(MEM_SIZE)
+
+	// Stub trap vectors first (low RAM), before the boot image is loaded.
+	// Address 0 means "ignore / return" in our TRAP handler.
+	for (let t = 0; t < 16; t++) write32raw(mem, 0x80 + t * 4, 0)
+
 	// Cold-boot-ish system variables
 	write32raw(mem, 0x0420, 0x752019f3) // memvalid
 	write32raw(mem, 0x042e, MEM_SIZE) // phystop
 	write32raw(mem, 0x0432, 0x00000800) // _membot
 	write32raw(mem, 0x0436, MEM_SIZE) // _memtop
+	// Some boot viruses (Signum) treat $4C6 as a usable RAM pointer.
+	write32raw(mem, 0x04c6, 0x00010000)
 
-	// Load boot sector at $0 (PC-relative code relocates with us).
+	// Boot sector in its own buffer — PC-relative code relocates with us.
 	mem.set(boot.subarray(0, BOOT_SECTOR_SIZE), BOOT_LOAD_ADDR)
 
 	const writes: SandboxWrite[] = []
@@ -121,9 +134,6 @@ export function runBootSandbox(
 	cpu.sp = (cpu.sp - 4) >>> 0
 	write32raw(mem, cpu.sp, RETURN_SENTINEL)
 	cpu.a[7] = cpu.sp
-
-	// Stub trap vectors → address 0 means "ignore / return" in our TRAP handler.
-	for (let t = 0; t < 16; t++) write32raw(mem, 0x80 + t * 4, 0)
 
 	try {
 		while (instructions < limit) {
