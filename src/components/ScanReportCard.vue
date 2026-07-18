@@ -102,14 +102,15 @@ function kindLabel(kind: ScanFinding['kind']): string {
 		</dl>
 
 		<button
-			v-if="report.bootSector && !showHex"
+			v-if="report.bootSector"
 			type="button"
 			class="scan-card__hex-toggle"
+			:aria-expanded="showHex"
 			@click="toggleHex"
-		>Show boot sector</button>
+		>{{ showHex ? 'Hide boot sector' : 'Show boot sector' }}</button>
 
 		<HexView
-			v-else-if="report.bootSector && showHex"
+			v-if="report.bootSector && showHex"
 			:image="report.bootSector"
 			:highlight-offsets="highlightOffsets"
 		/>

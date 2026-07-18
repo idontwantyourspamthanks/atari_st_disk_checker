@@ -123,4 +123,24 @@ describe('ScanReportCard', () => {
 		const wrapper = mount(ScanReportCard, { props: { report: baseReport({ bootSectorChecksum: 0x1234 }) } })
 		expect(wrapper.find('.scan-card__meta').text()).toContain('0x1234')
 	})
+
+	it('toggles the boot sector hex view show/hide', async () => {
+		const boot = new Uint8Array(512)
+		const wrapper = mount(ScanReportCard, {
+			props: { report: baseReport({ bootSector: boot }) },
+		})
+		const toggle = wrapper.find('.scan-card__hex-toggle')
+		expect(toggle.text()).toBe('Show boot sector')
+		expect(toggle.attributes('aria-expanded')).toBe('false')
+		expect(wrapper.find('.hex').exists()).toBe(false)
+
+		await toggle.trigger('click')
+		expect(toggle.text()).toBe('Hide boot sector')
+		expect(toggle.attributes('aria-expanded')).toBe('true')
+		expect(wrapper.find('.hex').exists()).toBe(true)
+
+		await toggle.trigger('click')
+		expect(toggle.text()).toBe('Show boot sector')
+		expect(wrapper.find('.hex').exists()).toBe(false)
+	})
 })
