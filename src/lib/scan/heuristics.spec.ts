@@ -92,6 +92,94 @@ describe('runHeuristics', () => {
 		expect(magic!.detail).toMatch(/MOVE\.L/i)
 	})
 
+	it('flags MOVE.L Dn,$426.W as a resvalid write', () => {
+		const boot = buildExecutableBootSector('X')
+		// MOVE.L D0,$426.W
+		boot.set([0x21, 0xc0, 0x04, 0x26], 0x50)
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const write = findings.find(f => f.id === 'resvalid-write')
+		expect(write).toBeDefined()
+		expect(write!.severity).toBe('high')
+		expect(write!.highlightOffsets).toContain(0x50)
+	})
+
+	it('flags MOVE.L #handler,$42A.W as a resvector write', () => {
+		const boot = buildExecutableBootSector('X')
+		// MOVE.L #$00001234,$42A.W
+		boot.set([0x21, 0xfc, 0x00, 0x00, 0x12, 0x34, 0x04, 0x2a], 0x50)
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const write = findings.find(f => f.id === 'resvector-write')
+		expect(write).toBeDefined()
+		expect(write!.severity).toBe('high')
+		expect(write!.headline).toMatch(/resvector/i)
+	})
+
+	it('flags MOVE.L An,$B4.W as a Trap #13 install', () => {
+		const boot = buildExecutableBootSector('X')
+		// MOVE.L A0,$B4.W
+		boot.set([0x21, 0xc8, 0x00, 0xb4], 0x60)
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const trap = findings.find(f => f.id === 'trap-vector-install')
+		expect(trap).toBeDefined()
+		expect(trap!.severity).toBe('high')
+		expect(trap!.detail).toMatch(/Trap #13/i)
+	})
+
+	it('flags MOVE.L Dn,$476.W as an hdv_rw install', () => {
+		const boot = buildExecutableBootSector('X')
+		boot.set([0x21, 0xc0, 0x04, 0x76], 0x60)
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const hdv = findings.find(f => f.id === 'hdv-vector-install')
+		expect(hdv).toBeDefined()
+		expect(hdv!.detail).toMatch(/hdv_rw/)
+	})
+
+	it('does not flag trap installs on a non-executable sector', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0x21, 0xc8, 0x00, 0xb4], 0x60)
+		// Leave checksum non-0x1234
+		const findings = runHeuristics(boot)
+		expect(findings.find(f => f.id === 'trap-vector-install')).toBeUndefined()
+		expect(findings.find(f => f.id === 'resvector-write')).toBeUndefined()
+	})
+
+	it('flags high-entropy executable payload as possible encryption or copy-protection', () => {
+		const boot = buildExecutableBootSector('X')
+		// Fill post-BPB with pseudo-random bytes (high entropy, not a simple string).
+		let x = 0x12345678
+		for (let i = 0x1e; i < 0x1fe; i++) {
+			x ^= x << 13
+			x ^= x >>> 17
+			x ^= x << 5
+			boot[i] = x & 0xff
+		}
+		// Keep a BRA entry so boot-code-present still recognises an opcode.
+		boot[0] = 0x60
+		boot[1] = 0x3c
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const entropy = findings.find(f => f.id === 'high-entropy-boot')
+		expect(entropy).toBeDefined()
+		expect(entropy!.severity).toBe('medium')
+		expect(entropy!.detail).toMatch(/copy-protection/i)
+		expect(entropy!.detail).toMatch(/virus/i)
+	})
+
+	it('does not flag ordinary ASCII payload as high-entropy', () => {
+		const boot = buildExecutableBootSector('HELLO WORLD FROM A PLAIN BOOT SECTOR PAYLOAD!!!')
+		const findings = runHeuristics(boot)
+		expect(findings.find(f => f.id === 'high-entropy-boot')).toBeUndefined()
+	})
+
 	it('flags geometry when bytes-per-sector is not 512', () => {
 		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
 		// Buffer is a Node global; safe to use in vitest.

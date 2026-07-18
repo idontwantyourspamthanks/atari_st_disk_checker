@@ -6,7 +6,11 @@ import {
 	startsWith68000Opcode,
 	countNonZeroBytesBeyondBpb,
 } from './bootSector'
-import { runHeuristics, type HeuristicFinding } from './heuristics'
+import {
+	runHeuristics,
+	PROTECTOR_EXPECTED_HEURISTIC_IDS,
+	type HeuristicFinding,
+} from './heuristics'
 import { matchSignatures, type SignatureMatch } from './signatures'
 import { matchProtectors } from './protectors'
 import type { ProtectorMatch } from './protectors'
@@ -120,7 +124,7 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 	const findings: ScanFinding[] = [
 		...signatureMatches.map(m => toSignatureFinding(m, boot.length, infectionStatus)),
 		...protectorMatches.map(m => toProtectorFinding(m, boot.length)),
-		...heuristicFindings.map(h => toHeuristicFinding(h, boot, executable)),
+		...heuristicFindings.map(h => toHeuristicFinding(h)),
 	]
 
 	synthesise(findings, signatureMatches, heuristicFindings, boot, protectorMatches)
@@ -264,9 +268,7 @@ function computeInfectionStatus(executable: boolean, boot: Uint8Array): Infectio
 
 function demoteBootCodeHeuristics(heuristics: HeuristicFinding[]): HeuristicFinding[] {
 	return heuristics.map(h => {
-		if (h.id !== 'boot-code-present' && h.id !== 'executable-boot-sector' && h.id !== 'resvalid-magic') {
-			return h
-		}
+		if (!PROTECTOR_EXPECTED_HEURISTIC_IDS.has(h.id)) return h
 		return {
 			...h,
 			severity: 'info',
@@ -350,33 +352,13 @@ export function synthesise(
 	}
 }
 
-function toHeuristicFinding(h: HeuristicFinding, boot: Uint8Array, executable: boolean): ScanFinding {
-	let highlightOffsets: number[] = []
-	if (executable) {
-		if (h.id === 'boot-code-present' || h.id === 'executable-boot-sector') {
-			highlightOffsets = [0]
-		}
-	}
-	if (h.id === 'resvalid-magic') {
-		const magic = [0x31, 0x41, 0x59, 0x26]
-		outer: for (let i = 0; i + magic.length <= boot.length; i++) {
-			for (let j = 0; j < magic.length; j++) {
-				if (boot[i + j] !== magic[j]) continue outer
-			}
-			for (let j = 0; j < magic.length; j++) highlightOffsets.push(i + j)
-			break
-		}
-	}
-	if (h.id === 'odd-media-descriptor') {
-		highlightOffsets = highlightOffsets.concat([0x15])
-	}
-
+function toHeuristicFinding(h: HeuristicFinding): ScanFinding {
 	return {
 		kind: 'heuristic',
 		name: h.headline,
 		detail: h.detail,
 		severity: h.severity,
-		highlightOffsets: highlightOffsets.length > 0 ? highlightOffsets : undefined,
+		highlightOffsets: h.highlightOffsets,
 	}
 }
 
