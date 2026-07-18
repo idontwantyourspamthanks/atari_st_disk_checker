@@ -1,0 +1,259 @@
+@import '@fontsource/press-start-2p';
+@import '@fontsource/vt323';
+
+/* ── Design tokens ───────────────────────────────────────────────────────────
+ *
+ * TOS desktop on a monitor: sage GEM desk field, grey window chrome, ink
+ * black text, and a muted ST green accent — not neon-on-black CRT terminal.
+ */
+
+:root {
+	/* Palette */
+	--color-bg:            #2f8f3a;
+	--color-bg-deep:       #24702e;
+	--color-panel:         #e8e8e8;
+	--color-panel-dim:     #c0c0c0;
+	--color-ink:           #000000;
+	--color-text:          #000000;
+	--color-text-on-panel: #000000;
+	--color-muted:         #14331a;
+	--color-st-green:      #1a7a28;
+	--color-st-green-dim:  #145c1e;
+	--color-st-green-soft: rgba(26, 122, 40, 0.18);
+	--color-danger:        #c42828;
+	--color-warning:       #c47a00;
+	--color-on-accent:     #000000;
+
+	/* Fonts */
+	--font-pixel:   'Press Start 2P', monospace;
+	--font-display: 'VT323', monospace;
+	--font-mono:    'VT323', monospace;
+
+	/* Geometry — square GEM chrome, chunky drop shadows */
+	--border:        2px solid var(--color-ink);
+	--border-panel:  2px solid var(--color-ink);
+	--shadow-gem:    4px 4px 0 var(--color-ink);
+	--shadow-gem-sm: 2px 2px 0 var(--color-ink);
+
+	/* Type scale (Press Start 2P is wide — keep sizes modest) */
+	--text-xs:  8px;
+	--text-sm:  10px;
+	--text-md:  12px;
+	--text-lg:  16px;
+	--text-xl:  28px;
+	--text-hero: 40px;
+
+	/* Monitor overlays */
+	--scanline-opacity: 0.04;
+}
+
+/* ── Reset ────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+	box-sizing: border-box;
+}
+
+html, body {
+	margin: 0;
+	padding: 0;
+	background-color: var(--color-bg);
+	/* Classic ST desk: fine diamond weave over the sage field */
+	background-image:
+		linear-gradient(45deg, var(--color-bg-deep) 25%, transparent 25%),
+		linear-gradient(-45deg, var(--color-bg-deep) 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, var(--color-bg-deep) 75%),
+		linear-gradient(-45deg, transparent 75%, var(--color-bg-deep) 75%);
+	background-size: 8px 8px;
+	background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+	color: var(--color-text);
+	font-family: var(--font-display);
+	font-size: 20px;
+	line-height: 1.4;
+	-webkit-font-smoothing: none;
+	-moz-osx-font-smoothing: grayscale;
+	image-rendering: pixelated;
+}
+
+#app {
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+	position: relative;
+	z-index: 0;
+}
+
+/* ── Monitor overlays — soft scanlines + light vignette ──────────────────── */
+
+body::after {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 9998;
+	background: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0, 0, 0, var(--scanline-opacity)) 2px,
+		rgba(0, 0, 0, var(--scanline-opacity)) 4px
+	);
+}
+
+body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 9997;
+	background: radial-gradient(
+		ellipse at center,
+		transparent 55%,
+		rgba(0, 0, 0, 0.22) 100%
+	);
+}
+
+/* ── Typography ───────────────────────────────────────────────────────────── */
+
+h1, h2, h3, h4 {
+	font-family: var(--font-pixel);
+	font-weight: normal;
+	line-height: 1.5;
+	margin: 0 0 1rem 0;
+	color: var(--color-ink);
+	text-shadow: none;
+}
+
+h1 { font-size: var(--text-xl); }
+h2 { font-size: var(--text-lg); }
+h3 { font-size: var(--text-md); }
+
+p { margin: 0 0 1rem 0; }
+
+a {
+	color: var(--color-st-green);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+
+code, kbd, samp {
+	font-family: var(--font-mono);
+	background: var(--color-st-green-soft);
+	padding: 0 0.25em;
+}
+
+/* ── GEM window chrome ────────────────────────────────────────────────────── */
+
+.gem-window {
+	background: var(--color-panel);
+	color: var(--color-text-on-panel);
+	border: var(--border-panel);
+	box-shadow: var(--shadow-gem);
+	padding: 1rem 1.25rem;
+}
+
+.gem-window__title {
+	font-family: var(--font-pixel);
+	font-size: var(--text-sm);
+	background: var(--color-st-green);
+	color: var(--color-on-accent);
+	padding: 0.25rem 0.5rem;
+	margin: -1rem -1.25rem 1rem -1.25rem;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	border-bottom: 2px solid var(--color-ink);
+}
+
+.gem-window__title button {
+	background: var(--color-panel);
+	color: var(--color-ink);
+	border: 2px solid var(--color-ink);
+	font-family: var(--font-pixel);
+	font-size: var(--text-xs);
+	padding: 0.25rem 0.5rem;
+	cursor: pointer;
+}
+
+.gem-window__title button:hover {
+	background: var(--color-ink);
+	color: var(--color-panel);
+}
+
+.gem-window__title button:active {
+	transform: translate(1px, 1px);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.btn {
+	font-family: var(--font-pixel);
+	font-size: var(--text-sm);
+	background: var(--color-st-green);
+	color: var(--color-on-accent);
+	border: 2px solid var(--color-ink);
+	padding: 0.65rem 1rem;
+	cursor: pointer;
+	box-shadow: var(--shadow-gem-sm);
+	transition: transform 60ms, box-shadow 60ms;
+}
+
+.btn:hover { background: #229432; }
+
+.btn:active {
+	transform: translate(2px, 2px);
+	box-shadow: 0 0 0 var(--color-ink);
+}
+
+.btn--secondary {
+	background: var(--color-panel);
+	color: var(--color-ink);
+	box-shadow: var(--shadow-gem-sm);
+}
+
+.btn--secondary:hover { background: var(--color-panel-dim); }
+
+.btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+	box-shadow: none;
+}
+
+/* ── Utility ──────────────────────────────────────────────────────────────── */
+
+.muted {
+	color: var(--color-ink);
+	opacity: 0.78;
+}
+
+.stack > * + * { margin-top: 1rem; }
+
+.cluster {
+	display: flex;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+/* Atari ST text rendering — chunky monospace, preserve whitespace */
+.st-text {
+	font-family: var(--font-mono);
+	font-size: 22px;
+	line-height: 1.15;
+	white-space: pre;
+	tab-size: 8;
+	background: var(--color-panel);
+	color: var(--color-text-on-panel);
+	padding: 1rem;
+	overflow: auto;
+	border: var(--border-panel);
+}
+
+/* ── Motion preferences ───────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

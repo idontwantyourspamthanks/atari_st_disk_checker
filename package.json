@@ -1,0 +1,36 @@
+{
+  "name": "diskcheck",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "zip": "node scripts/zip.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "gen:atarist": "node scripts/gen-atarist.mjs",
+    "gen:fixtures": "node scripts/gen-fixtures.mjs",
+    "gen:image-fixtures": "node scripts/gen-image-fixtures.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "vue": "^3.5.34",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@fontsource/press-start-2p": "^5.2.7",
+    "@fontsource/vt323": "^5.2.7",
+    "@types/node": "^24.12.3",
+    "@vitejs/plugin-vue": "^6.0.6",
+    "@vue/test-utils": "^2.4.10",
+    "@vue/tsconfig": "^0.9.1",
+    "jsdom": "^29.1.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^4.1.8",
+    "vue-tsc": "^3.2.8"
+  }
+}

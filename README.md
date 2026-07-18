@@ -1,0 +1,220 @@
+# DiskCheck
+
+Browser-only tools for Atari ST disk images. No backend, no accounts, no
+uploads — every byte stays on the machine you're browsing from.
+
+| Tool | What it does |
+|------|----------------|
+| **Files** | Render ST text and image formats (`.PI1`, `.NEO`, `.IFF`, …). Drop a `.ST`, `.MSA`, or `.STX` disk image to browse files inside it. |
+| **Scan** | Heuristic + signature boot-sector virus scanner for `.ST` / `.MSA` / `.STX` images, including ZIP batches. |
+
+The production build is a single self-contained `index.html` (~350 KB) that
+runs from `file://` in any modern browser — no server required.
+
+---
+
+## Use it (no install)
+
+**Downloaded the zip?** That's the intended end-user experience.
+
+1. Unzip `diskcheck-dist-*.zip`.
+2. Open `diskcheck/index.html` in Chrome, Firefox, Edge, Brave, or Safari.
+
+Double-clicking `index.html` works on most systems. The whole app is inlined
+into that one file — no extra assets, no network access, no installation.
+
+---
+
+## Develop locally
+
+**Requirements:** [Node.js](https://nodejs.org/) 20+ (LTS recommended) and npm.
+
+```bash
+git clone <your-repo-url>
+cd diskcheck          # this repository root
+npm install
+npm run dev           # http://localhost:5173
+```
+
+Other useful commands:
+
+```bash
+npm test              # run the test suite once
+npm run test:watch    # vitest in watch mode
+npm run build         # production build → dist/
+npm run preview       # serve dist/ locally at http://localhost:4173
+```
+
+`npm run preview` is the quickest way to sanity-check the production bundle
+before you zip it or upload it anywhere.
+
+---
+
+## Build a distribution zip
+
+```bash
+npm run zip
+```
+
+This runs a production build and writes `diskcheck-dist-<timestamp>.zip` in
+the project root. The archive contains:
+
+```
+diskcheck/
+├── index.html    ← the whole app, inlined
+└── README.md     ← short instructions for whoever receives the zip
+```
+
+Share that zip as-is. Recipients do not need Node.js.
+
+---
+
+## Deploy remotely
+
+DiskCheck is a static site. Deploy the contents of `dist/` (effectively just
+`index.html`) to any static host. No server-side code, database, or API keys.
+
+Because the build uses **relative asset paths** (`base: './'` in
+`vite.config.ts`) and **hash routing** (`#/text`, `#/scan`), it works when:
+
+- hosted at a domain root (`https://example.com/`)
+- hosted in a subdirectory (`https://example.com/diskcheck/`)
+- opened from `file://` after download
+
+No URL rewrites or SPA fallback rules are required.
+
+### GitHub Pages
+
+1. `npm run build`
+2. Push `dist/` to a `gh-pages` branch, or use a GitHub Action that runs
+   `npm ci && npm run build` and publishes `dist/`.
+3. In the repo's **Settings → Pages**, set the source to that branch / the
+   `dist` folder (depending on your workflow).
+
+If you use a project site (`https://<user>.github.io/<repo>/`), the relative
+`base` already points assets at the right place — no config change needed.
+
+### Cloudflare Pages
+
+1. Connect the repository.
+2. **Build command:** `npm run build`
+3. **Build output directory:** `dist`
+4. **Node version:** 20 or later (set in Environment variables if needed).
+
+### nginx (or any static file server)
+
+Copy `dist/index.html` to your web root (or a subdirectory):
+
+```bash
+npm run build
+rsync -a dist/ /var/www/diskcheck/
+```
+
+A minimal nginx location block is enough — no `try_files` fallback to
+`index.html` for client routes, because routing is hash-based:
+
+```nginx
+location /diskcheck/ {
+    alias /var/www/diskcheck/;
+    index index.html;
+}
+```
+
+### Verify after deploy
+
+Open the site and check both tools load:
+
+- `https://your-host/#/` — home
+- `https://your-host/#/text` — file viewer
+- `https://your-host/#/scan` — virus scanner
+
+---
+
+## How the build works
+
+| Setting | Why |
+|---------|-----|
+| `base: './'` | Relative paths — works under `file://` and in subdirectories. |
+| `vite-plugin-singlefile` | Inlines all JS/CSS into one `index.html`. Fixes Firefox blocking module scripts over `file://`. |
+| `createWebHashHistory()` | Links become `index.html#/text`, not `/text`, so they work without a server rewriting paths. |
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+Fixture images under `src/lib/**/__fixtures__/` are checked in so tests run
+offline. To regenerate disk-image fixtures (requires GNU `mtools`):
+
+```bash
+npm run gen:fixtures
+```
+
+Image-parser fixtures are pure JS:
+
+```bash
+npm run gen:image-fixtures
+```
+
+### Optional local scanner corpus
+
+For deeper scanner regression against a folder of real images, create
+`diskimages/` at the repo root (gitignored). Name files by class:
+`virus*`, `prot*`, `other*`. `src/lib/scan/diskimages.corpus.spec.ts` picks
+this up automatically and skips cleanly when the folder is absent.
+
+---
+
+## Regenerating the charset table
+
+The Atari ST → Unicode table in `src/lib/charsets/atariST.ts` is generated
+from the Unicode Consortium mapping checked in at `scripts/ATARIST.TXT`:
+
+```bash
+npm run gen:atarist
+```
+
+To refresh from upstream:
+
+```bash
+curl -o scripts/ATARIST.TXT \
+  https://www.unicode.org/Public/MAPPINGS/VENDORS/MISC/ATARIST.TXT
+npm run gen:atarist
+```
+
+---
+
+## Stack
+
+| Layer | Choice |
+|-------|--------|
+| Framework | Vue 3 + TypeScript |
+| Build | Vite |
+| Test | Vitest + jsdom |
+| Deploy target | Any static host |
+
+---
+
+## Project layout
+
+```
+├── dist-README.md           # README bundled into distribution zips
+├── scripts/
+│   ├── gen-atarist.mjs      # generates src/lib/charsets/atariST.ts
+│   ├── gen-fixtures.mjs     # disk-image fixtures (needs mtools)
+│   ├── gen-image-fixtures.mjs
+│   ├── msa-encode.mjs
+│   ├── stx-encode.mjs
+│   └── zip.mjs              # npm run zip
+└── src/
+    ├── lib/                 # disk, image, scan, charset logic
+    ├── components/
+    ├── views/
+    ├── App.vue
+    ├── main.ts
+    ├── router.ts
+    └── style.css
+```
