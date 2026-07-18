@@ -121,4 +121,16 @@ describe('runBootSandbox', () => {
 		expect(result.memorySignatures.some(h => h.name === 'Goblin')).toBe(true)
 		expect(result.memorySignatures.some(h => h.windowBase !== 0x4000)).toBe(true)
 	})
+
+	it('runs the Demoniak Trace-bit bootblock without unsupported opcodes', function () {
+		const boot = loadVirus('prot fuck to regis demoniak H327.MSA')
+		if (!boot) {
+			this.skip()
+			return
+		}
+		const result = runBootSandbox(boot)
+		expect(result.haltReason).not.toBe('unsupported')
+		expect(result.haltReason).not.toBe('error')
+		expect(result.ran).toBe(true)
+	})
 })

@@ -106,7 +106,8 @@ export function runBootSandbox(
 	const seen = new Set<string>()
 	const dirtyPages = new Set<number>()
 	let instructions = 0
-	const pcHits = new Map<number, number>()
+	let lastPc = -1
+	let consecutiveHits = 0
 
 	const cpu = new M68k(mem, (addr, size, value) => {
 		dirtyPages.add(addr >>> DIRTY_PAGE_SHIFT)
@@ -146,9 +147,14 @@ export function runBootSandbox(
 				return finish('return')
 			}
 
-			const hits = (pcHits.get(cpu.pc) ?? 0) + 1
-			pcHits.set(cpu.pc, hits)
-			if (hits >= LOOP_HIT_THRESHOLD) {
+			// Consecutive same-PC spin (VBL/key poll). Don't use lifetime
+			// totals — Trace handlers re-enter the same PCs thousands of times.
+			if (cpu.pc === lastPc) consecutiveHits++
+			else {
+				lastPc = cpu.pc
+				consecutiveHits = 1
+			}
+			if (consecutiveHits >= LOOP_HIT_THRESHOLD) {
 				return finish('loop')
 			}
 

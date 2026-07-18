@@ -213,6 +213,27 @@ export class M68k {
 
 	step(): void {
 		if (this.stopped) return
+		// 68000 Trace: if T was set at the start of this instruction, take a
+		// Trace exception after it completes. (MOVE to SR that enables T is
+		// itself not traced — takeTrace is sampled before the instruction.)
+		const takeTrace = (this.sr & 0x8000) !== 0
+		this.stepInner()
+		if (takeTrace && !this.stopped) this.raiseTrace()
+	}
+
+	/** Vector $24 — Trace exception. Stacks SR+PC, clears T, enters handler. */
+	private raiseTrace(): void {
+		const handler = this.read32(0x24)
+		if (handler === 0) return // no handler installed
+		this.sp = (this.sp - 4) >>> 0
+		this.write32(this.sp, this.pc)
+		this.sp = (this.sp - 2) >>> 0
+		this.write16(this.sp, this.sr) // stacked SR still has T set for RTE
+		this.sr = (this.sr | 0x2000) & ~0x8000 // supervisor, clear T
+		this.pc = handler >>> 0
+	}
+
+	private stepInner(): void {
 		const opPc = this.pc
 		const op = this.fetch16()
 
