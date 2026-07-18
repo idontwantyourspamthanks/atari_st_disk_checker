@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
-import { runBootSandbox, scanDirtyMemory, markDirtyRange, BOOT_LOAD_ADDR } from './bootSandbox'
+import { runBootSandbox, scanDirtyMemory, markDirtyRange, shouldScanHighRam, BOOT_LOAD_ADDR } from './bootSandbox'
 import {
 	getBootSector,
 	BOOT_SECTOR_SIZE,
@@ -177,5 +177,37 @@ describe('runBootSandbox', () => {
 		markDirtyRange(dirtyPages, dest, BOOT_SECTOR_SIZE)
 		const hits = scanDirtyMemory(mem, dirtyPages, boot)
 		expect(hits.some(h => h.windowBase === dest && h.name === 'Ghost A')).toBe(true)
+	})
+
+	it('skips the high-RAM band unless residency is hinted', () => {
+		const mem = new Uint8Array(0x10_0000)
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot[0x80] = 0x20
+		boot[0x81] = 0x3c
+		boot[0x82] = 0x31
+		boot[0x83] = 0x41
+		boot[0x84] = 0x59
+		boot[0x85] = 0x26
+		const high = 0x10_0000 - 0x1000
+		mem.set(boot, high)
+
+		const dirtyPages = new Set<number>()
+		expect(shouldScanHighRam(dirtyPages, [])).toBe(false)
+		expect(
+			scanDirtyMemory(mem, dirtyPages, boot, { scanHighRam: false }).some(
+				h => h.windowBase === high,
+			),
+		).toBe(false)
+		expect(
+			scanDirtyMemory(mem, dirtyPages, boot, { scanHighRam: true }).some(
+				h => h.windowBase === high && h.name === 'Ghost A',
+			),
+		).toBe(true)
+
+		expect(
+			shouldScanHighRam(dirtyPages, [
+				{ addr: 0x0426, name: 'resvalid', value: 0x31415926, atInstruction: 1 },
+			]),
+		).toBe(true)
 	})
 })

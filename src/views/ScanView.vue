@@ -11,6 +11,8 @@ const reports = ref<ScanReport[]>([])
 const error = ref<string | null>(null)
 const skipped = ref<string[]>([])
 const isScanning = ref(false)
+/** Images completed / total in the current batch (null when idle). */
+const scanProgress = ref<{ done: number; total: number } | null>(null)
 
 const summary = computed(() => {
 	const r = reports.value
@@ -32,14 +34,24 @@ const sortedReports = computed(() =>
 	[...reports.value].sort((a, b) => severityRank[a.status] - severityRank[b.status]),
 )
 
+/** Let the browser paint between images so big ZIP batches stay responsive. */
+function yieldToUi(): Promise<void> {
+	return new Promise(resolve => {
+		requestAnimationFrame(() => resolve())
+	})
+}
+
 async function onFiles(files: File[]) {
 	error.value = null
 	reports.value = []
 	skipped.value = []
 	isScanning.value = true
+	scanProgress.value = null
 
 	try {
-		const collected: ScanReport[] = []
+		type Job = { bytes: Uint8Array; name: string }
+		const jobs: Job[] = []
+
 		for (const file of files) {
 			const bytes = new Uint8Array(await file.arrayBuffer())
 			const lower = file.name.toLowerCase()
@@ -51,19 +63,30 @@ async function onFiles(files: File[]) {
 					continue
 				}
 				for (const entry of zip.entries) {
-					collected.push(scanImage(entry.bytes, entry.name))
+					jobs.push({ bytes: entry.bytes, name: entry.name })
 				}
 				skipped.value.push(...zip.skipped)
 			} else {
-				// Single .st / .msa (or anything else — let the scanner decide).
-				collected.push(scanImage(bytes, file.name))
+				jobs.push({ bytes, name: file.name })
 			}
 		}
-		reports.value = collected
+
+		const collected: ScanReport[] = []
+		scanProgress.value = { done: 0, total: jobs.length }
+
+		for (let i = 0; i < jobs.length; i++) {
+			const job = jobs[i]!
+			collected.push(scanImage(job.bytes, job.name))
+			reports.value = collected.slice()
+			scanProgress.value = { done: i + 1, total: jobs.length }
+			// Yield every image so the summary/cards can paint mid-batch.
+			await yieldToUi()
+		}
 	} catch (e) {
 		error.value = e instanceof Error ? e.message : String(e)
 	} finally {
 		isScanning.value = false
+		scanProgress.value = null
 	}
 }
 
@@ -100,12 +123,20 @@ useDropHandler(onFiles)
 		</div>
 
 		<FileDrop
-			v-if="reports.length === 0 && !error"
+			v-if="reports.length === 0 && !error && !isScanning"
 			accept=".st,.msa,.stx,.zip"
 			multiple
 			label="Drop .ST / .MSA / .STX / .ZIP — or click to pick"
 			@select="onFiles"
 		/>
+
+		<p v-if="isScanning && scanProgress" class="scan-progress gem-window">
+			Scanning
+			<strong>{{ scanProgress.done }}</strong>
+			/
+			<strong>{{ scanProgress.total }}</strong>
+			…
+		</p>
 
 		<p v-if="error" class="error">{{ error }}</p>
 
@@ -114,9 +145,9 @@ useDropHandler(onFiles)
 				<header class="gem-window__title">
 					<span>Summary</span>
 					<div class="summary__actions">
-						<button type="button" class="summary__export" @click="exportJson">JSON</button>
-						<button type="button" class="summary__export" @click="exportCsv">CSV</button>
-						<button type="button" @click="clear">Clear</button>
+						<button type="button" class="summary__export" :disabled="isScanning" @click="exportJson">JSON</button>
+						<button type="button" class="summary__export" :disabled="isScanning" @click="exportCsv">CSV</button>
+						<button type="button" :disabled="isScanning" @click="clear">Clear</button>
 					</div>
 				</header>
 				<dl class="summary__grid">
@@ -141,8 +172,6 @@ useDropHandler(onFiles)
 				/>
 			</div>
 		</section>
-
-		<p v-if="isScanning" class="muted">Scanning…</p>
 	</section>
 </template>
 
@@ -150,6 +179,20 @@ useDropHandler(onFiles)
 .error {
 	color: var(--color-danger);
 	font-family: var(--font-mono);
+}
+
+.scan-progress {
+	margin: 0;
+	padding: 0.75rem 1rem;
+	font-family: var(--font-pixel);
+	font-size: var(--text-sm);
+	color: var(--color-ink);
+}
+
+.scan-progress strong {
+	font-family: var(--font-mono);
+	font-size: 1.25rem;
+	color: var(--color-st-green);
 }
 
 .summary__grid {
@@ -197,6 +240,11 @@ useDropHandler(onFiles)
 	background: var(--color-panel);
 	border: 2px solid var(--color-ink);
 	color: var(--color-ink);
+}
+
+.summary__actions button:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
 }
 
 .reports {

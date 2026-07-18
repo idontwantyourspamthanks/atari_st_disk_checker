@@ -71,6 +71,18 @@ const STACK_TOP = 0x00080000
 const LOOP_HIT_THRESHOLD = 512
 const DIRTY_PAGE_SHIFT = 8 // 256-byte pages
 
+/** Reused across runs to avoid 1 MiB alloc + GC per executable boot. */
+let scratchMem: Uint8Array | null = null
+
+function acquireScratchMem(): Uint8Array {
+	if (!scratchMem || scratchMem.length !== MEM_SIZE) {
+		scratchMem = new Uint8Array(MEM_SIZE)
+	} else {
+		scratchMem.fill(0)
+	}
+	return scratchMem
+}
+
 /**
  * Run a boot sector in a tiny ST-like sandbox and report residency-related
  * side effects (vector installs, reset-proofing).
@@ -91,7 +103,7 @@ export function runBootSandbox(
 		return emptyResult('not-executable')
 	}
 
-	const mem = new Uint8Array(MEM_SIZE)
+	const mem = acquireScratchMem()
 
 	// Cold-boot-ish system variables (trap vectors unused — we intercept TRAPs).
 	write32raw(mem, 0x0420, 0x752019f3) // memvalid
@@ -180,7 +192,9 @@ export function runBootSandbox(
 			resetProofMagic: hasPi(writes),
 			resetProofVector: writes.some(w => w.addr === 0x042a),
 			hooks: hookNames(writes),
-			memorySignatures: scanDirtyMemory(mem, dirtyPages, boot),
+			memorySignatures: scanDirtyMemory(mem, dirtyPages, boot, {
+				scanHighRam: shouldScanHighRam(dirtyPages, writes),
+			}),
 			error: msg,
 			finalPc: cpu.pc,
 		}
@@ -195,7 +209,9 @@ export function runBootSandbox(
 			resetProofMagic: hasPi(writes),
 			resetProofVector: writes.some(w => w.addr === 0x042a),
 			hooks: hookNames(writes),
-			memorySignatures: scanDirtyMemory(mem, dirtyPages, boot),
+			memorySignatures: scanDirtyMemory(mem, dirtyPages, boot, {
+				scanHighRam: shouldScanHighRam(dirtyPages, writes),
+			}),
 			finalPc: cpu.pc,
 		}
 	}
@@ -298,13 +314,14 @@ export function markDirtyRange(
 }
 
 /**
- * Signature-scan 512-byte windows over dirty pages and a few high-RAM
- * candidates (typical virus residence just below phystop).
+ * Signature-scan 512-byte windows over dirty pages and, when residency is
+ * hinted, a high-RAM band just below phystop (classic hide-under-_memtop).
  */
 export function scanDirtyMemory(
 	mem: Uint8Array,
 	dirtyPages: Set<number>,
 	originalBoot: Uint8Array,
+	opts: { scanHighRam?: boolean } = {},
 ): MemorySignatureHit[] {
 	const bases = new Set<number>()
 	bases.add(BOOT_LOAD_ADDR)
@@ -314,9 +331,12 @@ export function scanDirtyMemory(
 		bases.add(addr & ~0xff)
 		bases.add(addr & ~0x1ff)
 	}
-	// Classic "hide under phystop" band
-	for (let a = MEM_SIZE - 0x8000; a < MEM_SIZE - 0x200; a += 0x200) {
-		bases.add(a)
+	// Only walk the ~64 high-RAM windows when something already smells like
+	// residency — dirty pages outside the boot buffer, or vector hooks.
+	if (opts.scanHighRam) {
+		for (let a = MEM_SIZE - 0x8000; a < MEM_SIZE - 0x200; a += 0x200) {
+			bases.add(a)
+		}
 	}
 
 	const originalNames = new Set(
@@ -341,9 +361,6 @@ export function scanDirtyMemory(
 
 		const matches: SignatureMatch[] = matchSignatures(window)
 		for (const m of matches) {
-			// Always report hits outside the original boot load window.
-			// Inside it, only report if we also saw a relocated copy elsewhere
-			// (handled by collecting all then filtering).
 			const key = `${m.signature.name}@${base}`
 			if (seen.has(key)) continue
 			seen.add(key)
@@ -372,6 +389,21 @@ export function scanDirtyMemory(
 	// No relocation — keep boot-window hits only when static scan wouldn't
 	// already see them (e.g. in-place decrypt). Compare name set loosely:
 	return hits.filter(h => h.windowBase === BOOT_LOAD_ADDR && !originalNames.has(h.name))
+}
+
+/** True when dirty/hooks suggest code may have relocated under phystop. */
+export function shouldScanHighRam(
+	dirtyPages: Set<number>,
+	writes: SandboxWrite[],
+): boolean {
+	if (hasPi(writes) || writes.some(w => w.addr === 0x042a)) return true
+	if (hookNames(writes).length > 0) return true
+	const bootLo = BOOT_LOAD_ADDR >>> DIRTY_PAGE_SHIFT
+	const bootHi = (BOOT_LOAD_ADDR + BOOT_SECTOR_SIZE - 1) >>> DIRTY_PAGE_SHIFT
+	for (const page of dirtyPages) {
+		if (page < bootLo || page > bootHi) return true
+	}
+	return false
 }
 
 function write32raw(mem: Uint8Array, addr: number, value: number): void {
