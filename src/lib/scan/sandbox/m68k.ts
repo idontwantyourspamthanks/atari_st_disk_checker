@@ -28,6 +28,10 @@ export class M68k {
 	sr = 0x2700 // supervisor, interrupts masked — typical boot state
 	stopped = false
 	trapHandler?: TrapHandler
+	/** Line-A opcodes stubbed this run (for tests / diagnostics). */
+	lineACalls: number[] = []
+	/** Line-F opcodes soft-stubbed this run. */
+	lineFCalls: number[] = []
 
 	constructor(
 		readonly mem: Uint8Array,
@@ -401,12 +405,73 @@ export class M68k {
 			this.sr &= ~0x8000
 			return
 		}
+		this.raiseException(0x24)
+	}
+
+	/**
+	 * Group-2 style exception: stack SR+PC (PC = next insn), enter handler.
+	 * Used by CHK; Trace uses the same frame once a handler exists.
+	 */
+	private raiseException(vectorAddr: number, faultOp = 0): void {
+		const handler = this.read32(vectorAddr)
+		if (handler === 0) {
+			throw new M68kError(
+				`unhandled exception (vector $${vectorAddr.toString(16)})`,
+				this.pc,
+				faultOp,
+			)
+		}
 		this.sp = (this.sp - 4) >>> 0
 		this.write32(this.sp, this.pc)
 		this.sp = (this.sp - 2) >>> 0
-		this.write16(this.sp, this.sr) // stacked SR still has T set for RTE
+		this.write16(this.sp, this.sr)
 		this.sr = (this.sr | 0x2000) & ~0x8000 // supervisor, clear T
 		this.pc = handler >>> 0
+	}
+
+	/**
+	 * Stub TOS Line-A graphics ($A000–$A00F). Real ST takes vector $28 into
+	 * TOS; we emulate the useful outcomes so boots/cracktros that call AES
+	 * primitives keep running without a full VDI.
+	 *
+	 * $A000 init returns pointers into a tiny fake Line-A variable block in
+	 * low RAM. Drawing ops are successful no-ops (Get Pixel returns 0).
+	 */
+	private stubLineA(op: number): void {
+		this.lineACalls.push(op)
+		const fn = op & 0x0fff
+
+		// Fake Line-A structures in low RAM (above TOS system variables).
+		const LINEA_VARS = 0x00000b00
+		const LINEA_FONTS = 0x00000f00 // single NULL long
+		const LINEA_JTBL = 0x00000f04 // 16 longs (zeros → “use opcode form”)
+
+		if (fn === 0) {
+			// Ensure fonts list is NULL-terminated and jump table is zeroed once.
+			this.write32(LINEA_FONTS, 0)
+			for (let i = 0; i < 16; i++) this.write32(LINEA_JTBL + i * 4, 0)
+			this.d[0] = LINEA_VARS
+			this.a[0] = LINEA_VARS
+			this.a[1] = LINEA_FONTS
+			this.a[2] = LINEA_JTBL
+			return
+		}
+
+		if (fn >= 1 && fn <= 15) {
+			// Put/Get pixel, lines, fills, BitBlt, mouse, sprites, seedfill…
+			// Get Pixel ($A002) returns colour in D0 — use 0 (background).
+			this.d[0] = 0
+			return
+		}
+
+		// Rare extended Line-A numbers — treat as success.
+		this.d[0] = 0
+	}
+
+	/** Soft-stub Line-F ($Fxxx). No FPU on a classic ST; continue cleanly. */
+	private stubLineF(op: number): void {
+		this.lineFCalls.push(op)
+		// Leave registers alone; many “F-line” encodings are just padding.
 	}
 
 	private stepInner(): void {
@@ -524,9 +589,16 @@ export class M68k {
 			return
 		}
 
-		// Line-A ($Axxx) / Line-F ($Fxxx) — TOS / FPU; no-op for boot triage.
-		if ((op & 0xf000) === 0xa000 || (op & 0xf000) === 0xf000) return
-
+		// Line-A ($Axxx) — stub TOS graphics primitives (see stubLineA).
+		if ((op & 0xf000) === 0xa000) {
+			this.stubLineA(op)
+			return
+		}
+		// Line-F ($Fxxx) — soft-stub (no 68881 on a classic ST).
+		if ((op & 0xf000) === 0xf000) {
+			this.stubLineF(op)
+			return
+		}
 		// MOVE <ea>, SR  (46C0+) / MOVE #imm, SR (46FC)
 		if ((op & 0xffc0) === 0x46c0) {
 			const mode = (op >> 3) & 7
@@ -743,13 +815,21 @@ export class M68k {
 			return
 		}
 
-		// CHK <ea>, Dn — bounds check; assume in-range for sandbox (no trap).
+		// CHK.W <ea>, Dn — raise CHK exception (vector $18) if out of bounds.
 		if ((op & 0xf1c0) === 0x4180) {
+			const dn = (op >> 9) & 7
 			const mode = (op >> 3) & 7
 			const reg = op & 7
-			// Consume EA / immediate without trapping
-			if (mode === 7 && reg === 4) this.fetch16()
-			else this.resolveEa(mode, reg, 2)
+			let bound: number
+			if (mode === 7 && reg === 4) {
+				bound = this.sign16(this.fetch16())
+			} else {
+				bound = this.sign16(this.readEa(this.resolveEa(mode, reg, 2), 2) & 0xffff)
+			}
+			const val = this.sign16(this.d[dn]! & 0xffff)
+			if (val < 0 || val > bound) {
+				this.raiseException(0x18, op)
+			}
 			return
 		}
 
