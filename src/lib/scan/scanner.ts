@@ -336,6 +336,23 @@ export function sandboxToFindings(result: SandboxResult): ScanFinding[] {
 		})
 	}
 
+	if (result.memorySignatures.length > 0) {
+		const names = [...new Set(result.memorySignatures.map(h => h.name))]
+		const relocated = result.memorySignatures.filter(h => h.windowBase !== 0x4000)
+		out.push({
+			kind: 'sandbox',
+			name: 'Sandbox: signature in RAM',
+			detail:
+				`After execution, signature material for ${names.join(', ')} was found in ` +
+				`sandbox RAM` +
+				(relocated.length > 0
+					? ` including outside the boot buffer (e.g. $${relocated[0]!.windowBase.toString(16)}) — likely a relocated or decrypted copy.`
+					: ` (in-place transform of the boot sector).`) +
+				` Ran ${result.instructions} instructions (${result.haltReason}).`,
+			severity: 'high',
+		})
+	}
+
 	return out
 }
 

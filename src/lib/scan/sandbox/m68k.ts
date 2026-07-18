@@ -18,12 +18,16 @@ export class M68kError extends Error {
 
 export type MemWriteHook = (addr: number, size: 1 | 2 | 4, value: number) => void
 
+/** If set, TRAP #n is handled here instead of vector dispatch. */
+export type TrapHandler = (trapNo: number, cpu: M68k) => void
+
 export class M68k {
 	readonly d = new Uint32Array(8)
 	readonly a = new Uint32Array(8)
 	pc = 0
 	sr = 0x2700 // supervisor, interrupts masked — typical boot state
 	stopped = false
+	trapHandler?: TrapHandler
 
 	constructor(
 		readonly mem: Uint8Array,
@@ -268,6 +272,10 @@ export class M68k {
 		// TRAP #n
 		if ((op & 0xfff0) === 0x4e40) {
 			const n = op & 0xf
+			if (this.trapHandler) {
+				this.trapHandler(n, this)
+				return
+			}
 			// Vector at 0x80 + n*4; push SR+PC like a real trap, then jump.
 			const vec = this.read32(0x80 + n * 4)
 			this.sp = (this.sp - 4) >>> 0
@@ -282,6 +290,185 @@ export class M68k {
 				this.pc = this.read32(this.sp)
 				this.sp = (this.sp + 4) >>> 0
 			}
+			return
+		}
+
+		// Line-A ($Axxx) / Line-F ($Fxxx) — TOS / FPU; no-op for boot triage.
+		if ((op & 0xf000) === 0xa000 || (op & 0xf000) === 0xf000) return
+
+		// MOVE <ea>, SR  (46C0+) / MOVE #imm, SR (46FC)
+		if ((op & 0xffc0) === 0x46c0) {
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			let value: number
+			if (mode === 7 && reg === 4) value = this.fetch16()
+			else value = this.readEa(this.resolveEa(mode, reg, 2), 2)
+			this.sr = value & 0xffff
+			return
+		}
+
+		// MOVE SR, <ea>  (40C0+)
+		if ((op & 0xffc0) === 0x40c0) {
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			const ea = this.resolveEa(mode, reg, 2)
+			this.writeEa(ea, 2, this.sr & 0xffff)
+			return
+		}
+
+		// ORI/ANDI/EORI to CCR/SR
+		if (op === 0x007c || op === 0x027c || op === 0x0a7c) {
+			const imm = this.fetch16()
+			if (op === 0x007c) this.sr = (this.sr | imm) & 0xffff // ORI to SR
+			else if (op === 0x027c) this.sr = (this.sr & imm) & 0xffff // ANDI to SR
+			else this.sr = (this.sr ^ imm) & 0xffff // EORI to SR
+			return
+		}
+		if (op === 0x003c || op === 0x023c || op === 0x0a3c) {
+			const imm = this.fetch16() & 0xff
+			const ccr = this.sr & 0xff
+			let next = ccr
+			if (op === 0x003c) next = ccr | imm
+			else if (op === 0x023c) next = ccr & imm
+			else next = ccr ^ imm
+			this.sr = (this.sr & 0xff00) | (next & 0xff)
+			return
+		}
+
+		// TST.B / TST.W / TST.L
+		if ((op & 0xff00) === 0x4a00) {
+			const sizeBits = (op >> 6) & 3
+			if (sizeBits <= 2) {
+				const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
+				const mode = (op >> 3) & 7
+				const reg = op & 7
+				const ea = this.resolveEa(mode, reg, size)
+				const value = this.readEa(ea, size)
+				this.setNzFrom(size, value)
+				return
+			}
+		}
+
+		// NOT.B / NOT.W / NOT.L
+		if ((op & 0xff00) === 0x4600) {
+			const sizeBits = (op >> 6) & 3
+			if (sizeBits <= 2) {
+				const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
+				const mode = (op >> 3) & 7
+				const reg = op & 7
+				const ea = this.resolveEa(mode, reg, size)
+				const value = this.readEa(ea, size)
+				const result = ~value
+				this.writeEa(ea, size, result)
+				this.setNzFrom(size, result)
+				return
+			}
+		}
+
+		// BTST / BCHG / BCLR / BSET — static bit number
+		if ((op & 0xff00) === 0x0800) {
+			const sub = (op >> 6) & 3 // 0=BTST 1=BCHG 2=BCLR 3=BSET
+			const bitImm = this.fetch16() & 0xff
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			const size: 1 | 4 = mode === 0 ? 4 : 1 // Dn tests 32-bit; memory 8-bit
+			const ea = this.resolveEa(mode, reg, size === 4 ? 4 : 1)
+			const value = this.readEa(ea, size === 4 ? 4 : 1)
+			const bit = size === 4 ? bitImm & 31 : bitImm & 7
+			const mask = 1 << bit
+			const z = (value & mask) === 0
+			this.sr = (this.sr & ~0x04) | (z ? 0x04 : 0)
+			if (sub === 1) this.writeEa(ea, size === 4 ? 4 : 1, value ^ mask)
+			else if (sub === 2) this.writeEa(ea, size === 4 ? 4 : 1, value & ~mask)
+			else if (sub === 3) this.writeEa(ea, size === 4 ? 4 : 1, value | mask)
+			return
+		}
+
+		// BTST / BCHG / BCLR / BSET — dynamic (bit number in Dn)
+		if ((op & 0xf100) === 0x0100 && ((op >> 6) & 3) <= 3 && (op & 0xf1c0) !== 0x0100) {
+			// 0000 rrr 1ss MMM RRR with ss in 00..11 — overlaps MOVEP; skip MOVEP (mode 1)
+			const mode = (op >> 3) & 7
+			if (mode !== 1) {
+				const sub = (op >> 6) & 3
+				const dn = (op >> 9) & 7
+				const reg = op & 7
+				const size: 1 | 4 = mode === 0 ? 4 : 1
+				const ea = this.resolveEa(mode, reg, size === 4 ? 4 : 1)
+				const value = this.readEa(ea, size === 4 ? 4 : 1)
+				const bit = size === 4 ? this.d[dn]! & 31 : this.d[dn]! & 7
+				const mask = 1 << bit
+				const z = (value & mask) === 0
+				this.sr = (this.sr & ~0x04) | (z ? 0x04 : 0)
+				if (sub === 1) this.writeEa(ea, size === 4 ? 4 : 1, value ^ mask)
+				else if (sub === 2) this.writeEa(ea, size === 4 ? 4 : 1, value & ~mask)
+				else if (sub === 3) this.writeEa(ea, size === 4 ? 4 : 1, value | mask)
+				return
+			}
+		}
+
+		// AND/OR/EOR with immediate to Dn via #imm forms already in 0xxx;
+		// AND.B #imm,Dn as C0xx: 1100 rrr 000 111 100 = AND.B #imm, Dn
+		if ((op & 0xf1bf) === 0xc03c || (op & 0xf1bf) === 0xc07c || (op & 0xf1bf) === 0xc0bc) {
+			// AND #imm, Dn
+			const dn = (op >> 9) & 7
+			const sizeBits = (op >> 6) & 3
+			const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
+			const imm = size === 1 ? this.fetch16() & 0xff : size === 2 ? this.fetch16() : this.fetch32()
+			const cur = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+			const result = cur & imm
+			this.writeEa({ dn }, size, result)
+			this.setNzFrom(size, result)
+			return
+		}
+		if ((op & 0xf1bf) === 0x803c || (op & 0xf1bf) === 0x807c || (op & 0xf1bf) === 0x80bc) {
+			// OR #imm, Dn
+			const dn = (op >> 9) & 7
+			const sizeBits = (op >> 6) & 3
+			const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
+			const imm = size === 1 ? this.fetch16() & 0xff : size === 2 ? this.fetch16() : this.fetch32()
+			const cur = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+			const result = cur | imm
+			this.writeEa({ dn }, size, result)
+			this.setNzFrom(size, result)
+			return
+		}
+
+		// Register shifts/rotates with immediate count
+		if ((op & 0xf018) === 0xe000 || (op & 0xf018) === 0xe008 ||
+			(op & 0xf018) === 0xe010 || (op & 0xf018) === 0xe018) {
+			const countField = (op >> 9) & 7
+			const sizeBits = (op >> 6) & 3
+			if (sizeBits <= 2 && (op & 0x0020) === 0) {
+				// bit 5 = 0 → immediate count; bit 5 = 1 → count in Dx (still OK with same mask area)
+				const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
+				const dn = op & 7
+				const left = (op & 0x0100) !== 0
+				const count = countField === 0 ? 8 : countField
+				const mask = size === 1 ? 0xff : size === 2 ? 0xffff : 0xffffffff
+				let value = this.d[dn]! & mask
+				if (left) value = (value << count) & mask
+				else value = (value >>> count) & mask
+				this.writeEa({ dn }, size, value)
+				this.setNzFrom(size, value)
+				return
+			}
+		}
+
+		// Memory-form shifts (word only): ASL/ASR/LSL/LSR/ROL/ROR/ROXL/ROXR <ea>
+		if ((op & 0xf8c0) === 0xe0c0) {
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			const ea = this.resolveEa(mode, reg, 2)
+			let value = this.readEa(ea, 2) & 0xffff
+			// Memory form: 1110 0tt 111 MMM RRR
+			// 000 ASR, 001 LSR, 010 ROXR, 011 ROR, 100 ASL, 101 LSL, 110 ROXL, 111 ROL
+			const kind = (op >> 9) & 7
+			if (kind === 0 || kind === 1) value = value >>> 1
+			else if (kind === 4 || kind === 5) value = (value << 1) & 0xffff
+			else if (kind === 7 || kind === 6) value = ((value << 1) | (value >>> 15)) & 0xffff
+			else value = ((value >>> 1) | ((value & 1) << 15)) & 0xffff
+			this.writeEa(ea, 2, value)
+			this.setNzFrom(2, value)
 			return
 		}
 
@@ -328,6 +515,16 @@ export class M68k {
 				this.d[dn] = (this.d[dn]! & 0xffff0000) | low
 				if (low !== 0xffff) this.pc = target
 			}
+			return
+		}
+
+		// CHK <ea>, Dn — bounds check; assume in-range for sandbox (no trap).
+		if ((op & 0xf1c0) === 0x4180) {
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			// Consume EA / immediate without trapping
+			if (mode === 7 && reg === 4) this.fetch16()
+			else this.resolveEa(mode, reg, 2)
 			return
 		}
 
@@ -434,7 +631,7 @@ export class M68k {
 			return
 		}
 
-		// CMP / CMPA
+		// CMP / CMPA / EOR
 		if ((op & 0xf000) === 0xb000) {
 			const opmode = (op >> 6) & 7
 			const dn = (op >> 9) & 7
@@ -451,7 +648,6 @@ export class M68k {
 				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst - src
 				this.setNzFrom(size, result)
-				// rough C/V
 				return
 			}
 			if (opmode === 3 || opmode === 7) {
@@ -465,6 +661,99 @@ export class M68k {
 				if (size === 2) src = this.sign16(src)
 				const result = (this.a[dn]! >>> 0) - (src >>> 0)
 				this.setNzFrom(4, result)
+				return
+			}
+			// EOR Dn, <ea>
+			if (opmode === 4 || opmode === 5 || opmode === 6) {
+				const size: 1 | 2 | 4 = opmode === 4 ? 1 : opmode === 5 ? 2 : 4
+				const ea = this.resolveEa(mode, reg, size)
+				const dst = this.readEa(ea, size)
+				const src = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+				const result = dst ^ src
+				this.writeEa(ea, size, result)
+				this.setNzFrom(size, result)
+				return
+			}
+		}
+
+		// MULS.W / MULU.W ea, Dn
+		if ((op & 0xf1c0) === 0xc1c0 || (op & 0xf1c0) === 0xc0c0) {
+			const dn = (op >> 9) & 7
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			const signed = (op & 0x0100) !== 0
+			let src: number
+			if (mode === 7 && reg === 4) src = this.fetch16()
+			else src = this.readEa(this.resolveEa(mode, reg, 2), 2)
+			const dst = this.d[dn]! & 0xffff
+			let result: number
+			if (signed) result = (this.sign16(dst) * this.sign16(src)) | 0
+			else result = ((dst * (src & 0xffff)) >>> 0)
+			this.d[dn] = result >>> 0
+			this.setNzFrom(4, result)
+			return
+		}
+
+		// AND ea,Dn / AND Dn,ea
+		if ((op & 0xf000) === 0xc000) {
+			const opmode = (op >> 6) & 7
+			const dn = (op >> 9) & 7
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			if (opmode === 0 || opmode === 1 || opmode === 2) {
+				const size: 1 | 2 | 4 = opmode === 0 ? 1 : opmode === 1 ? 2 : 4
+				let src: number
+				if (mode === 7 && reg === 4) {
+					src = size === 1 ? this.fetch16() & 0xff : size === 2 ? this.fetch16() : this.fetch32()
+				} else {
+					src = this.readEa(this.resolveEa(mode, reg, size), size)
+				}
+				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+				const result = dst & src
+				this.writeEa({ dn }, size, result)
+				this.setNzFrom(size, result)
+				return
+			}
+			if (opmode === 4 || opmode === 5 || opmode === 6) {
+				const size: 1 | 2 | 4 = opmode === 4 ? 1 : opmode === 5 ? 2 : 4
+				const ea = this.resolveEa(mode, reg, size)
+				const dst = this.readEa(ea, size)
+				const src = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+				const result = dst & src
+				this.writeEa(ea, size, result)
+				this.setNzFrom(size, result)
+				return
+			}
+		}
+
+		// OR ea,Dn / OR Dn,ea
+		if ((op & 0xf000) === 0x8000) {
+			const opmode = (op >> 6) & 7
+			const dn = (op >> 9) & 7
+			const mode = (op >> 3) & 7
+			const reg = op & 7
+			if (opmode === 0 || opmode === 1 || opmode === 2) {
+				const size: 1 | 2 | 4 = opmode === 0 ? 1 : opmode === 1 ? 2 : 4
+				let src: number
+				if (mode === 7 && reg === 4) {
+					src = size === 1 ? this.fetch16() & 0xff : size === 2 ? this.fetch16() : this.fetch32()
+				} else {
+					src = this.readEa(this.resolveEa(mode, reg, size), size)
+				}
+				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+				const result = dst | src
+				this.writeEa({ dn }, size, result)
+				this.setNzFrom(size, result)
+				return
+			}
+			if (opmode === 4 || opmode === 5 || opmode === 6) {
+				const size: 1 | 2 | 4 = opmode === 4 ? 1 : opmode === 5 ? 2 : 4
+				const ea = this.resolveEa(mode, reg, size)
+				const dst = this.readEa(ea, size)
+				const src = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
+				const result = dst | src
+				this.writeEa(ea, size, result)
+				this.setNzFrom(size, result)
 				return
 			}
 		}

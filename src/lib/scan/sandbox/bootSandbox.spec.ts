@@ -110,4 +110,15 @@ describe('runBootSandbox', () => {
 		expect(result.haltReason).toBe('return')
 		expect(result.hooks).toContain('hdv_bpb')
 	})
+
+	it('finds Goblin signature in relocated RAM after sandbox run', function () {
+		const boot = loadVirus('virus goblin a H456.MSA')
+		if (!boot) {
+			this.skip()
+			return
+		}
+		const result = runBootSandbox(boot)
+		expect(result.memorySignatures.some(h => h.name === 'Goblin')).toBe(true)
+		expect(result.memorySignatures.some(h => h.windowBase !== 0x4000)).toBe(true)
+	})
 })
