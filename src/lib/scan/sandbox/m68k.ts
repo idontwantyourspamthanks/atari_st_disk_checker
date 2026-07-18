@@ -434,6 +434,20 @@ export class M68k {
 			this.pc = this.a[op & 7]! >>> 0
 			return
 		}
+		// JMP (d16,An)
+		if ((op & 0xfff8) === 0x4ee8) {
+			const an = op & 7
+			const d16 = this.sign16(this.fetch16())
+			this.pc = (this.a[an]! + d16) >>> 0
+			return
+		}
+		// JMP (d16,PC)
+		if (op === 0x4efa) {
+			const extAddr = this.pc
+			const d16 = this.sign16(this.fetch16())
+			this.pc = (extAddr + d16) >>> 0
+			return
+		}
 		// JMP Abs.W / Abs.L
 		if (op === 0x4ef8) {
 			this.pc = this.sign16(this.fetch16()) >>> 0
@@ -446,6 +460,26 @@ export class M68k {
 		// JSR (An)
 		if ((op & 0xfff8) === 0x4e90) {
 			const dest = this.a[op & 7]! >>> 0
+			this.sp = (this.sp - 4) >>> 0
+			this.write32(this.sp, this.pc)
+			this.pc = dest
+			return
+		}
+		// JSR (d16,An)
+		if ((op & 0xfff8) === 0x4ea8) {
+			const an = op & 7
+			const d16 = this.sign16(this.fetch16())
+			const dest = (this.a[an]! + d16) >>> 0
+			this.sp = (this.sp - 4) >>> 0
+			this.write32(this.sp, this.pc)
+			this.pc = dest
+			return
+		}
+		// JSR (d16,PC)
+		if (op === 0x4eba) {
+			const extAddr = this.pc
+			const d16 = this.sign16(this.fetch16())
+			const dest = (extAddr + d16) >>> 0
 			this.sp = (this.sp - 4) >>> 0
 			this.write32(this.sp, this.pc)
 			this.pc = dest

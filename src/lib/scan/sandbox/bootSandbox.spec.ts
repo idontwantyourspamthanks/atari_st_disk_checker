@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { runBootSandbox, scanDirtyMemory, markDirtyRange, shouldScanHighRam, BOOT_LOAD_ADDR } from './bootSandbox'
+import { buildXorEncryptedBoot } from './encryptedBootFixture'
+import { matchSignatures } from '../signatures'
 import {
 	getBootSector,
 	BOOT_SECTOR_SIZE,
@@ -209,5 +211,18 @@ describe('runBootSandbox', () => {
 				{ addr: 0x0426, name: 'resvalid', value: 0x31415926, atInstruction: 1 },
 			]),
 		).toBe(true)
+	})
+
+	it('decrypts a synthetic XOR boot and observes residency + Ghost in RAM', () => {
+		const boot = buildXorEncryptedBoot()
+		expect(matchSignatures(boot).some(m => m.signature.name === 'Ghost A')).toBe(false)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.haltReason).not.toBe('unsupported')
+		expect(result.haltReason).not.toBe('loop')
+		expect(result.resetProofMagic).toBe(true)
+		expect(result.hooks).toContain('hdv_bpb')
+		expect(result.memorySignatures.some(h => h.name === 'Ghost A')).toBe(true)
 	})
 })

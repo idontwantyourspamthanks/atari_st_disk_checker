@@ -120,10 +120,20 @@ export function runBootSandbox(
 	let instructions = 0
 	let lastPc = -1
 	let consecutiveHits = 0
+	/** Second PC in a tight 2-insn cycle (decrypt/poll). */
+	let prevPc = -1
+	let cycle2Hits = 0
+	let lastProgressWrites = 0
+	let progressWriteCount = 0
 
 	const cpu = new M68k(mem, (addr, size, _value) => {
 		dirtyPages.add(addr >>> DIRTY_PAGE_SHIFT)
 		if (size === 4) dirtyPages.add((addr + 2) >>> DIRTY_PAGE_SHIFT)
+		// Decrypt loops write into the boot image — count as progress so we
+		// don't mistake a XOR/DBF body for a VBL spin.
+		if (addr >= BOOT_LOAD_ADDR && addr < BOOT_LOAD_ADDR + BOOT_SECTOR_SIZE) {
+			progressWriteCount++
+		}
 		if (size !== 4 && size !== 2 && size !== 1) return
 		const writeEnd = addr + size
 		for (const v of WATCHED_VECTORS) {
@@ -164,15 +174,30 @@ export function runBootSandbox(
 				return finish('stray')
 			}
 
-			// Consecutive same-PC spin (VBL/key poll). Don't use lifetime
-			// totals — Trace handlers re-enter the same PCs thousands of times.
+			const progressed = progressWriteCount > lastProgressWrites
+			if (progressed) lastProgressWrites = progressWriteCount
+
+			// Consecutive same-PC spin (VBL/key poll). Ignore while the boot
+			// image is still being rewritten (decrypt-in-place).
 			if (cpu.pc === lastPc) consecutiveHits++
 			else {
+				// Two-PC cycle: A→B→A… common for TST/BNE polls and DBF bodies.
+				if (cpu.pc === prevPc && lastPc !== prevPc) cycle2Hits++
+				else cycle2Hits = 0
+				prevPc = lastPc
 				lastPc = cpu.pc
 				consecutiveHits = 1
 			}
-			if (consecutiveHits >= LOOP_HIT_THRESHOLD) {
-				return finish('loop')
+			if (!progressed) {
+				if (consecutiveHits >= LOOP_HIT_THRESHOLD) {
+					return finish('loop')
+				}
+				if (cycle2Hits >= LOOP_HIT_THRESHOLD) {
+					return finish('loop')
+				}
+			} else {
+				consecutiveHits = 0
+				cycle2Hits = 0
 			}
 
 			cpu.step()

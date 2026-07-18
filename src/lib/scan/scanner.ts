@@ -112,7 +112,31 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 	const signatureMatches = matchSignatures(boot)
 	const protectorMatches = matchProtectors(boot)
 	let heuristicFindings = runHeuristics(boot)
-	let sandboxFindings = sandboxToFindings(runBootSandbox(boot))
+	const sandboxResult = runBootSandbox(boot)
+	let sandboxFindings = sandboxToFindings(sandboxResult)
+
+	// High-entropy executable boot that ran but installed nothing we watch:
+	// be honest — packed/encrypted or protection, not a clean bill of health.
+	if (
+		sandboxResult.ran &&
+		sandboxFindings.length === 0 &&
+		heuristicFindings.some(h => h.id === 'high-entropy-boot')
+	) {
+		sandboxFindings = [
+			...sandboxFindings,
+			{
+				kind: 'sandbox',
+				name: 'Sandbox: no residency after run',
+				detail:
+					`The boot sector looks packed/encrypted (high entropy) and the sandbox ` +
+					`executed ${sandboxResult.instructions} instructions (${sandboxResult.haltReason}) ` +
+					`without observing reset-proofing, vector hooks, or a decrypted virus ` +
+					`signature in RAM. That can be commercial copy-protection — or an ` +
+					`encrypting boot we did not fully unpack. Not a clean bill of health.`,
+				severity: 'info',
+			},
+		]
+	}
 
 	const infectionStatus = computeInfectionStatus(executable, boot)
 	const liveVirus = signatureMatches.length > 0 && infectionStatus !== 'immunized'

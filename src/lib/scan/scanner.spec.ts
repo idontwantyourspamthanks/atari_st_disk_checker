@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { scanImage, synthesise, type ScanFinding } from './scanner'
 import { buildExecutableBootSector, fixBootSectorChecksum } from './bootSector.spec'
+import { buildXorEncryptedBoot } from './sandbox/encryptedBootFixture'
 import { BOOT_SECTOR_SIZE, ST_BOOT_SECTOR_EXE_SUM } from './bootSector'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -341,5 +342,34 @@ describe('scanImage — heuristic ↔ signature synthesis', () => {
 		const sandbox = report.findings.filter(f => f.kind === 'sandbox')
 		expect(sandbox.some(f => f.severity === 'high')).toBe(true)
 		expect(report.status).toBe('suspicious')
+	})
+
+	it('surfaces Ghost via sandbox after XOR decrypt of a synthetic boot', () => {
+		const boot = buildXorEncryptedBoot()
+		const report = scanImage(boot, 'synthetic-xor-ghost.st')
+		expect(report.findings.filter(f => f.kind === 'signature')).toEqual([])
+		expect(report.findings.some(f => f.kind === 'sandbox' && f.name.includes('reset-proof'))).toBe(true)
+		expect(report.findings.some(f => f.kind === 'sandbox' && f.name.includes('signature in RAM'))).toBe(true)
+		expect(report.status).toBe('suspicious')
+	})
+
+	it('admits uncertainty when a high-entropy boot runs without residency', () => {
+		const boot = buildExecutableBootSector('X')
+		let x = 0x12345678
+		for (let i = 0x1e; i < 0x1fe; i++) {
+			x ^= x << 13
+			x ^= x >>> 17
+			x ^= x << 5
+			boot[i] = x & 0xff
+		}
+		boot[0] = 0x60
+		boot[1] = 0x3c
+		boot[0x3e] = 0x4e
+		boot[0x3f] = 0x75 // RTS — sandbox runs, installs nothing
+		fixBootSectorChecksum(boot)
+
+		const report = scanImage(boot, 'entropy-rts.st')
+		expect(report.findings.some(f => f.name.includes('High-entropy'))).toBe(true)
+		expect(report.findings.some(f => f.name.includes('no residency after run'))).toBe(true)
 	})
 })
