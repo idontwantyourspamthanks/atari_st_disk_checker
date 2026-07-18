@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
-import { runBootSandbox } from './bootSandbox'
+import { runBootSandbox, scanDirtyMemory, markDirtyRange, BOOT_LOAD_ADDR } from './bootSandbox'
 import {
 	getBootSector,
 	BOOT_SECTOR_SIZE,
@@ -132,5 +132,50 @@ describe('runBootSandbox', () => {
 		expect(result.haltReason).not.toBe('unsupported')
 		expect(result.haltReason).not.toBe('error')
 		expect(result.ran).toBe(true)
+	})
+
+	it('records resvalid when a MOVE.L overlaps from $424', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot[0] = 0x60
+		boot[1] = 0x1c
+		boot[0x0b] = 0x00
+		boot[0x0c] = 0x02
+		boot[0x0d] = 2
+		boot[0x15] = 0xfd
+		boot[0x16] = 5
+		// At $1E: MOVE.L #$31415926, $424 — overlaps resvalid at $426
+		const code = [
+			0x23, 0xfc, 0x31, 0x41, 0x59, 0x26, 0x00, 0x00, 0x04, 0x24,
+			0x4e, 0x75,
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.writes.some(w => w.addr === 0x0426)).toBe(true)
+	})
+
+	it('finds signatures at mid-RAM when trap-copy pages are marked dirty', () => {
+		const mem = new Uint8Array(0x10_0000)
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		// Ghost bytes-scan needle
+		boot[0x80] = 0x20
+		boot[0x81] = 0x3c
+		boot[0x82] = 0x31
+		boot[0x83] = 0x41
+		boot[0x84] = 0x59
+		boot[0x85] = 0x26
+		mem.set(boot, BOOT_LOAD_ADDR)
+		const dest = 0x6000
+		mem.set(boot, dest)
+
+		const dirtyPages = new Set<number>()
+		// Without dirty marks, mid-RAM is outside the high-RAM scan band.
+		expect(scanDirtyMemory(mem, dirtyPages, boot).some(h => h.windowBase === dest)).toBe(false)
+
+		markDirtyRange(dirtyPages, dest, BOOT_SECTOR_SIZE)
+		const hits = scanDirtyMemory(mem, dirtyPages, boot)
+		expect(hits.some(h => h.windowBase === dest && h.name === 'Ghost A')).toBe(true)
 	})
 })

@@ -86,11 +86,183 @@ export class M68k {
 		return ((w << 16) | this.fetch16()) >>> 0
 	}
 
+	/**
+	 * Logical / MOVE-style CCR: N/Z from result, C=V=0, X unchanged.
+	 * (X lives in bit 4, outside the 0x0f mask.)
+	 */
 	private setNzFrom(size: 1 | 2 | 4, value: number): void {
 		const mask = size === 1 ? 0xff : size === 2 ? 0xffff : 0xffffffff
 		const v = value & mask
 		const sign = size === 1 ? 0x80 : size === 2 ? 0x8000 : 0x80000000
 		this.sr = (this.sr & ~0x0f) | (v === 0 ? 0x04 : 0) | (v & sign ? 0x08 : 0)
+	}
+
+	/**
+	 * ADD/SUB/CMP-style CCR. CMP passes touchX=false (X unchanged);
+	 * ADD/SUB/ADDQ/SUBQ/ADDI/SUBI pass touchX=true (X mirrors C).
+	 */
+	private setAddSubFlags(
+		size: 1 | 2 | 4,
+		dst: number,
+		src: number,
+		result: number,
+		isSub: boolean,
+		touchX: boolean,
+	): void {
+		const mask = size === 1 ? 0xff : size === 2 ? 0xffff : 0xffffffff
+		const smask = size === 1 ? 0x80 : size === 2 ? 0x8000 : 0x80000000
+		const d = (dst >>> 0) & mask
+		const s = (src >>> 0) & mask
+		const r = (result >>> 0) & mask
+		const c = isSub ? d < s : d + s > mask
+		const v = isSub
+			? ((d ^ s) & (d ^ r) & smask) !== 0
+			: (~(d ^ s) & (d ^ r) & smask) !== 0
+		const n = (r & smask) !== 0
+		const z = r === 0
+		this.sr =
+			(this.sr & ~0x0f) |
+			(z ? 0x04 : 0) |
+			(n ? 0x08 : 0) |
+			(c ? 0x01 : 0) |
+			(v ? 0x02 : 0)
+		if (touchX) {
+			this.sr = c ? this.sr | 0x10 : this.sr & ~0x10
+		}
+	}
+
+	private sizeMask(size: 1 | 2 | 4): number {
+		return size === 1 ? 0xff : size === 2 ? 0xffff : 0xffffffff
+	}
+	private sizeBits(size: 1 | 2 | 4): number {
+		return size === 1 ? 8 : size === 2 ? 16 : 32
+	}
+	private sizeSign(size: 1 | 2 | 4): number {
+		return size === 1 ? 0x80 : size === 2 ? 0x8000 : 0x80000000
+	}
+
+	/**
+	 * Register/memory shift-rotate. kind: 0=AS, 1=LS, 2=ROX, 3=RO.
+	 * Updates N/Z/C/V/X per 68000 rules (V cleared for LS/RO/ROX; ASL sets V
+	 * if the MSB ever changed during the shift).
+	 */
+	private doShift(
+		size: 1 | 2 | 4,
+		value: number,
+		count: number,
+		left: boolean,
+		kind: 0 | 1 | 2 | 3,
+	): number {
+		const mask = this.sizeMask(size)
+		const bits = this.sizeBits(size)
+		const smask = this.sizeSign(size)
+		let v = value & mask
+		count &= 63 // 68000: modulo 64
+
+		if (count === 0) {
+			this.setNzFrom(size, v)
+			if (kind === 2) {
+				// ROXL/ROXR with count 0: C ← X
+				if (this.sr & 0x10) this.sr |= 0x01
+			}
+			return v
+		}
+
+		let carry = false
+		let overflow = false
+		const xIn = (this.sr & 0x10) !== 0
+
+		if (kind === 0) {
+			// ASL / ASR
+			if (left) {
+				const startMsb = (v & smask) !== 0
+				for (let i = 0; i < count; i++) {
+					carry = (v & smask) !== 0
+					v = (v << 1) & mask
+					if (((v & smask) !== 0) !== startMsb) overflow = true
+				}
+			} else {
+				for (let i = 0; i < count; i++) {
+					carry = (v & 1) !== 0
+					const msb = v & smask
+					v = (v >>> 1) | msb
+				}
+			}
+			this.sr =
+				(this.sr & ~0x1f) |
+				((v & mask) === 0 ? 0x04 : 0) |
+				(v & smask ? 0x08 : 0) |
+				(carry ? 0x01 | 0x10 : 0) |
+				(left && overflow ? 0x02 : 0)
+			return v
+		}
+
+		if (kind === 1) {
+			// LSL / LSR
+			if (left) {
+				for (let i = 0; i < count; i++) {
+					carry = (v & smask) !== 0
+					v = (v << 1) & mask
+				}
+			} else {
+				for (let i = 0; i < count; i++) {
+					carry = (v & 1) !== 0
+					v = v >>> 1
+				}
+			}
+			this.sr =
+				(this.sr & ~0x1f) |
+				((v & mask) === 0 ? 0x04 : 0) |
+				(v & smask ? 0x08 : 0) |
+				(carry ? 0x01 | 0x10 : 0)
+			return v
+		}
+
+		if (kind === 3) {
+			// ROL / ROR
+			const c = count % bits
+			if (left) {
+				v = ((v << c) | (v >>> (bits - c))) & mask
+				carry = (v & 1) !== 0 // bit rotated into LSB was previous MSB path; C = bit 0 after ROL
+			} else {
+				v = ((v >>> c) | (v << (bits - c))) & mask
+				carry = (v & smask) !== 0 // C = MSB after ROR
+			}
+			// X unaffected for ROL/ROR
+			this.sr =
+				(this.sr & ~0x0f) |
+				((v & mask) === 0 ? 0x04 : 0) |
+				(v & smask ? 0x08 : 0) |
+				(carry ? 0x01 : 0)
+			return v
+		}
+
+		// ROXL / ROXR — 9/17/33-bit rotate through X
+		const rotBits = bits + 1
+		let c = count % rotBits
+		let x = xIn
+		if (left) {
+			for (let i = 0; i < c; i++) {
+				const out = (v & smask) !== 0
+				v = ((v << 1) & mask) | (x ? 1 : 0)
+				x = out
+				carry = out
+			}
+		} else {
+			for (let i = 0; i < c; i++) {
+				const out = (v & 1) !== 0
+				v = (v >>> 1) | (x ? smask : 0)
+				x = out
+				carry = out
+			}
+		}
+		this.sr =
+			(this.sr & ~0x1f) |
+			((v & mask) === 0 ? 0x04 : 0) |
+			(v & smask ? 0x08 : 0) |
+			(carry ? 0x01 : 0) |
+			(x ? 0x10 : 0)
+		return v
 	}
 
 	private flagZ(): boolean {
@@ -224,7 +396,11 @@ export class M68k {
 	/** Vector $24 — Trace exception. Stacks SR+PC, clears T, enters handler. */
 	private raiseTrace(): void {
 		const handler = this.read32(0x24)
-		if (handler === 0) return // no handler installed
+		if (handler === 0) {
+			// No handler — clear T so we don't spin no-op Trace forever.
+			this.sr &= ~0x8000
+			return
+		}
 		this.sp = (this.sp - 4) >>> 0
 		this.write32(this.sp, this.pc)
 		this.sp = (this.sp - 2) >>> 0
@@ -454,23 +630,23 @@ export class M68k {
 			return
 		}
 
-		// Register shifts/rotates with immediate count
+		// Register shifts/rotates: ASL/ASR/LSL/LSR/ROXL/ROXR/ROL/ROR
+		// 1110 ccc d sz tt i rrr — i=0 imm count, i=1 count in Dx
 		if ((op & 0xf018) === 0xe000 || (op & 0xf018) === 0xe008 ||
 			(op & 0xf018) === 0xe010 || (op & 0xf018) === 0xe018) {
 			const countField = (op >> 9) & 7
 			const sizeBits = (op >> 6) & 3
-			if (sizeBits <= 2 && (op & 0x0020) === 0) {
-				// bit 5 = 0 → immediate count; bit 5 = 1 → count in Dx (still OK with same mask area)
+			if (sizeBits <= 2) {
 				const size: 1 | 2 | 4 = sizeBits === 0 ? 1 : sizeBits === 1 ? 2 : 4
 				const dn = op & 7
 				const left = (op & 0x0100) !== 0
-				const count = countField === 0 ? 8 : countField
-				const mask = size === 1 ? 0xff : size === 2 ? 0xffff : 0xffffffff
-				let value = this.d[dn]! & mask
-				if (left) value = (value << count) & mask
-				else value = (value >>> count) & mask
+				const kind = ((op >> 3) & 3) as 0 | 1 | 2 | 3
+				const count = (op & 0x0020) !== 0
+					? this.d[countField]! & 63
+					: countField === 0 ? 8 : countField
+				const mask = this.sizeMask(size)
+				const value = this.doShift(size, this.d[dn]! & mask, count, left, kind)
 				this.writeEa({ dn }, size, value)
-				this.setNzFrom(size, value)
 				return
 			}
 		}
@@ -480,16 +656,10 @@ export class M68k {
 			const mode = (op >> 3) & 7
 			const reg = op & 7
 			const ea = this.resolveEa(mode, reg, 2)
-			let value = this.readEa(ea, 2) & 0xffff
-			// Memory form: 1110 0tt 111 MMM RRR
-			// 000 ASR, 001 LSR, 010 ROXR, 011 ROR, 100 ASL, 101 LSL, 110 ROXL, 111 ROL
-			const kind = (op >> 9) & 7
-			if (kind === 0 || kind === 1) value = value >>> 1
-			else if (kind === 4 || kind === 5) value = (value << 1) & 0xffff
-			else if (kind === 7 || kind === 6) value = ((value << 1) | (value >>> 15)) & 0xffff
-			else value = ((value >>> 1) | ((value & 1) << 15)) & 0xffff
+			const left = (op & 0x0100) !== 0
+			const kind = ((op >> 9) & 3) as 0 | 1 | 2 | 3
+			const value = this.doShift(2, this.readEa(ea, 2), 1, left, kind)
 			this.writeEa(ea, 2, value)
-			this.setNzFrom(2, value)
 			return
 		}
 
@@ -648,7 +818,7 @@ export class M68k {
 			const cur = this.readEa(ea, size)
 			const result = isSub ? cur - imm : cur + imm
 			this.writeEa(ea, size, result)
-			if (mode !== 1) this.setNzFrom(size, result) // address reg ops don't set CCR the same; ignore
+			if (mode !== 1) this.setAddSubFlags(size, cur, imm, result, isSub, true)
 			return
 		}
 
@@ -668,7 +838,7 @@ export class M68k {
 				}
 				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst - src
-				this.setNzFrom(size, result)
+				this.setAddSubFlags(size, dst, src, result, true, false)
 				return
 			}
 			if (opmode === 3 || opmode === 7) {
@@ -680,8 +850,9 @@ export class M68k {
 					src = this.readEa(this.resolveEa(mode, reg, size), size)
 				}
 				if (size === 2) src = this.sign16(src)
-				const result = (this.a[dn]! >>> 0) - (src >>> 0)
-				this.setNzFrom(4, result)
+				const dst = this.a[dn]! >>> 0
+				const result = (dst - (src >>> 0)) | 0
+				this.setAddSubFlags(4, dst, src >>> 0, result, true, false)
 				return
 			}
 			// EOR Dn, <ea>
@@ -810,7 +981,7 @@ export class M68k {
 				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst - src
 				this.writeEa({ dn }, size, result)
-				this.setNzFrom(size, result)
+				this.setAddSubFlags(size, dst, src, result, true, true)
 				return
 			}
 			// SUB Dn, ea
@@ -821,7 +992,7 @@ export class M68k {
 				const src = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst - src
 				this.writeEa(ea, size, result)
-				this.setNzFrom(size, result)
+				this.setAddSubFlags(size, dst, src, result, true, true)
 				return
 			}
 		}
@@ -855,7 +1026,7 @@ export class M68k {
 				const dst = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst + src
 				this.writeEa({ dn }, size, result)
-				this.setNzFrom(size, result)
+				this.setAddSubFlags(size, dst, src, result, false, true)
 				return
 			}
 			if (opmode === 4 || opmode === 5 || opmode === 6) {
@@ -865,7 +1036,7 @@ export class M68k {
 				const src = size === 1 ? this.d[dn]! & 0xff : size === 2 ? this.d[dn]! & 0xffff : this.d[dn]!
 				const result = dst + src
 				this.writeEa(ea, size, result)
-				this.setNzFrom(size, result)
+				this.setAddSubFlags(size, dst, src, result, false, true)
 				return
 			}
 		}
@@ -888,12 +1059,20 @@ export class M68k {
 				let result = dst
 				if (kind === 0) result = dst | imm // ORI
 				else if (kind === 1) result = dst & imm // ANDI
-				else if (kind === 2) result = dst - imm // SUBI
-				else if (kind === 3) result = dst + imm // ADDI
-				else if (kind === 5) result = dst ^ imm // EORI
+				else if (kind === 2) {
+					result = dst - imm // SUBI
+					this.writeEa(ea, size, result)
+					this.setAddSubFlags(size, dst, imm, result, true, true)
+					return
+				} else if (kind === 3) {
+					result = dst + imm // ADDI
+					this.writeEa(ea, size, result)
+					this.setAddSubFlags(size, dst, imm, result, false, true)
+					return
+				} else if (kind === 5) result = dst ^ imm // EORI
 				else if (kind === 6) {
-					// CMPI
-					this.setNzFrom(size, dst - imm)
+					// CMPI — X unaffected
+					this.setAddSubFlags(size, dst, imm, dst - imm, true, false)
 					return
 				}
 				this.writeEa(ea, size, result)

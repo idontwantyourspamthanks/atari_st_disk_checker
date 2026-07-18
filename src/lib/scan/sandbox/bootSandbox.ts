@@ -35,7 +35,7 @@ export interface SandboxResult {
 	/** Did we attempt to run (executable boot)? */
 	ran: boolean
 	instructions: number
-	haltReason: 'return' | 'limit' | 'loop' | 'unsupported' | 'error' | 'not-executable'
+	haltReason: 'return' | 'limit' | 'loop' | 'stray' | 'unsupported' | 'error' | 'not-executable'
 	/** Vector / system-var writes observed. */
 	writes: SandboxWrite[]
 	/** True if resvalid was set to π ($31415926). */
@@ -109,26 +109,31 @@ export function runBootSandbox(
 	let lastPc = -1
 	let consecutiveHits = 0
 
-	const cpu = new M68k(mem, (addr, size, value) => {
+	const cpu = new M68k(mem, (addr, size, _value) => {
 		dirtyPages.add(addr >>> DIRTY_PAGE_SHIFT)
 		if (size === 4) dirtyPages.add((addr + 2) >>> DIRTY_PAGE_SHIFT)
-		if (size !== 4 && size !== 2) return
+		if (size !== 4 && size !== 2 && size !== 1) return
+		const writeEnd = addr + size
 		for (const v of WATCHED_VECTORS) {
-			if (addr === v.addr) {
-				const key = `${v.addr}:${value >>> 0}`
+			const vecEnd = v.addr + 4
+			// Any overlapping write into the watched longword — read live RAM
+			// so MOVE.L at $424 covering resvalid ($426) still counts.
+			if (addr < vecEnd && writeEnd > v.addr) {
+				const live = read32raw(mem, v.addr)
+				const key = `${v.addr}:${live}`
 				if (seen.has(key)) continue
 				seen.add(key)
 				writes.push({
 					addr: v.addr,
 					name: v.name,
-					value: value >>> 0,
+					value: live,
 					atInstruction: instructions,
 				})
 			}
 		}
 	})
 
-	cpu.trapHandler = (trapNo, c) => handleTrap(trapNo, c, mem)
+	cpu.trapHandler = (trapNo, c) => handleTrap(trapNo, c, mem, dirtyPages)
 
 	cpu.pc = BOOT_LOAD_ADDR
 	cpu.sp = STACK_TOP
@@ -141,10 +146,10 @@ export function runBootSandbox(
 			if (cpu.pc === RETURN_SENTINEL) {
 				return finish('return')
 			}
-			// Strayed into vector/system-variable space (e.g. JMP to memvalid) —
-			// stop; any residency writes already recorded still count.
-			if (cpu.pc < BOOT_LOAD_ADDR && cpu.pc >= 0x100) {
-				return finish('return')
+			// Strayed below the boot load window into vector/system-variable
+			// space — stop; any residency writes already recorded still count.
+			if (cpu.pc < BOOT_LOAD_ADDR) {
+				return finish('stray')
 			}
 
 			// Consecutive same-PC spin (VBL/key poll). Don't use lifetime
@@ -230,7 +235,12 @@ function hookNames(writes: SandboxWrite[]): string[] {
  * BIOS / XBIOS / GEMDOS stubs. Enough for install paths that re-read the
  * boot sector or probe disk presence. Returns success (D0=0) by default.
  */
-function handleTrap(trapNo: number, cpu: M68k, mem: Uint8Array): void {
+function handleTrap(
+	trapNo: number,
+	cpu: M68k,
+	mem: Uint8Array,
+	dirtyPages: Set<number>,
+): void {
 	if (trapNo === 13) {
 		// BIOS — function in D0.W
 		const fn = cpu.d[0]! & 0xffff
@@ -241,7 +251,7 @@ function handleTrap(trapNo: number, cpu: M68k, mem: Uint8Array): void {
 			const count = cpu.read16(cpu.sp + 6)
 			const recno = cpu.read16(cpu.sp + 8)
 			if ((rwflag & 1) === 0 && recno === 0 && count > 0) {
-				copyBootTo(mem, buf)
+				copyBootTo(mem, buf, dirtyPages)
 			}
 		}
 		cpu.d[0] = 0
@@ -256,7 +266,7 @@ function handleTrap(trapNo: number, cpu: M68k, mem: Uint8Array): void {
 			const sector = cpu.read16(cpu.sp + 12)
 			const track = cpu.read16(cpu.sp + 14)
 			if (fn === 8 && track === 0 && sector === 1) {
-				copyBootTo(mem, buf)
+				copyBootTo(mem, buf, dirtyPages)
 			}
 		}
 		cpu.d[0] = 0
@@ -266,10 +276,25 @@ function handleTrap(trapNo: number, cpu: M68k, mem: Uint8Array): void {
 	cpu.d[0] = 0
 }
 
-function copyBootTo(mem: Uint8Array, buf: number): void {
+function copyBootTo(mem: Uint8Array, buf: number, dirtyPages: Set<number>): void {
 	buf >>>= 0
 	if (buf + BOOT_SECTOR_SIZE > mem.length) return
 	mem.set(mem.subarray(BOOT_LOAD_ADDR, BOOT_LOAD_ADDR + BOOT_SECTOR_SIZE).slice(), buf)
+	// mem.set bypasses onWrite — mark destination pages dirty so RAM
+	// signature scans see relocated boot copies outside the high-RAM band.
+	markDirtyRange(dirtyPages, buf, BOOT_SECTOR_SIZE)
+}
+
+/** Mark a byte range dirty (exported for unit tests). */
+export function markDirtyRange(
+	dirtyPages: Set<number>,
+	addr: number,
+	length: number,
+): void {
+	for (let off = 0; off < length; off += 1 << DIRTY_PAGE_SHIFT) {
+		dirtyPages.add((addr + off) >>> DIRTY_PAGE_SHIFT)
+	}
+	if (length > 0) dirtyPages.add((addr + length - 1) >>> DIRTY_PAGE_SHIFT)
 }
 
 /**
@@ -354,4 +379,14 @@ function write32raw(mem: Uint8Array, addr: number, value: number): void {
 	mem[addr + 1] = (value >>> 16) & 0xff
 	mem[addr + 2] = (value >>> 8) & 0xff
 	mem[addr + 3] = value & 0xff
+}
+
+function read32raw(mem: Uint8Array, addr: number): number {
+	return (
+		(((mem[addr] ?? 0) << 24) |
+			((mem[addr + 1] ?? 0) << 16) |
+			((mem[addr + 2] ?? 0) << 8) |
+			(mem[addr + 3] ?? 0)) >>>
+		0
+	)
 }

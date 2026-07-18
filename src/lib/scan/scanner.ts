@@ -11,7 +11,7 @@ import {
 	PROTECTOR_EXPECTED_HEURISTIC_IDS,
 	type HeuristicFinding,
 } from './heuristics'
-import { runBootSandbox, type SandboxResult } from './sandbox/bootSandbox'
+import { runBootSandbox, BOOT_LOAD_ADDR, type SandboxResult } from './sandbox/bootSandbox'
 import { matchSignatures, type SignatureMatch } from './signatures'
 import { matchProtectors } from './protectors'
 import type { ProtectorMatch } from './protectors'
@@ -119,6 +119,8 @@ export function scanImage(input: Uint8Array, fileName: string): ScanReport {
 
 	// A named protector explains an executable boot sector — demote the
 	// generic boot-code heuristics so the card isn't double-alarmed.
+	// High-severity sandbox residency evidence is kept loud: a short
+	// protector string must not hide reset-proof / vector-hook installs.
 	if (protectorMatches.length > 0 && !liveVirus) {
 		heuristicFindings = demoteBootCodeHeuristics(heuristicFindings)
 		sandboxFindings = demoteSandboxFindings(sandboxFindings)
@@ -285,13 +287,17 @@ function demoteBootCodeHeuristics(heuristics: HeuristicFinding[]): HeuristicFind
 }
 
 function demoteSandboxFindings(findings: ScanFinding[]): ScanFinding[] {
-	return findings.map(f => ({
-		...f,
-		severity: 'info' as const,
-		detail:
-			f.detail +
-			' Consistent with a known boot protector — see protector finding above.',
-	}))
+	return findings.map(f => {
+		// Keep high-severity residency evidence at full severity.
+		if (f.severity === 'high') return f
+		return {
+			...f,
+			severity: 'info' as const,
+			detail:
+				f.detail +
+				' Consistent with a known boot protector — see protector finding above.',
+		}
+	})
 }
 
 /** Turn sandbox side-effects into scan findings. */
@@ -338,7 +344,7 @@ export function sandboxToFindings(result: SandboxResult): ScanFinding[] {
 
 	if (result.memorySignatures.length > 0) {
 		const names = [...new Set(result.memorySignatures.map(h => h.name))]
-		const relocated = result.memorySignatures.filter(h => h.windowBase !== 0x4000)
+		const relocated = result.memorySignatures.filter(h => h.windowBase !== BOOT_LOAD_ADDR)
 		out.push({
 			kind: 'sandbox',
 			name: 'Sandbox: signature in RAM',
@@ -453,6 +459,11 @@ function computeStatus(
 			return 'infected'
 		}
 	}
+	// High sandbox residency outranks a protector string match — status
+	// must not quietly become "protected" when EXEC found reset-proofing
+	// or vector hooks.
+	const hasHighSandbox = sandboxFindings.some(f => f.severity === 'high')
+	if (hasHighSandbox) return 'suspicious'
 	if (protectors.length > 0) {
 		return 'protected'
 	}

@@ -314,4 +314,32 @@ describe('scanImage — heuristic ↔ signature synthesis', () => {
 		expect(report.findings.some(f => f.kind === 'protector' && f.name === 'Sagrotan')).toBe(true)
 		expect(report.findings.filter(f => f.kind === 'signature')).toEqual([])
 	})
+
+	it('does not let a protector string outrank high sandbox residency', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot[0] = 0x60
+		boot[1] = 0x1c
+		boot[0x0b] = 0x00
+		boot[0x0c] = 0x02
+		boot[0x0d] = 2
+		boot[0x15] = 0xfd
+		boot[0x16] = 5
+		// Reset-proof install + hdv_bpb hook
+		const code = [
+			0x23, 0xfc, 0x31, 0x41, 0x59, 0x26, 0x00, 0x00, 0x04, 0x26, // MOVE.L #π,$426
+			0x23, 0xfc, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x04, 0x72, // MOVE.L #$5000,$472
+			0x4e, 0x75,
+		]
+		boot.set(code, 0x1e)
+		// Protector needle in unused tail — must not force status=protected
+		const needle = 'SAGROTAN'
+		for (let i = 0; i < needle.length; i++) boot[0x100 + i] = needle.charCodeAt(i)
+		fixBootSectorChecksum(boot)
+
+		const report = scanImage(boot, 'hostile-with-sagrotan-string.st')
+		expect(report.findings.some(f => f.kind === 'protector')).toBe(true)
+		const sandbox = report.findings.filter(f => f.kind === 'sandbox')
+		expect(sandbox.some(f => f.severity === 'high')).toBe(true)
+		expect(report.status).toBe('suspicious')
+	})
 })

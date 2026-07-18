@@ -130,8 +130,8 @@ function kindLabel(kind: ScanFinding['kind']): string {
 
 			<ul class="scan-card__findings">
 				<li
-					v-for="finding in report.findings"
-					:key="finding.name"
+					v-for="(finding, index) in report.findings"
+					:key="`${index}-${finding.kind}-${finding.name}`"
 					:class="`finding finding--${finding.severity} finding--${finding.kind}`"
 				>
 					<div class="finding__tldr">
@@ -153,8 +153,8 @@ function kindLabel(kind: ScanFinding['kind']): string {
 		</div>
 
 		<p v-else-if="!report.error" class="scan-card__nofindings muted">
-			No signatures matched and no heuristics tripped. Boot sector looks like
-			a standard data-disk sector.
+			No signatures, heuristics, or sandbox residency checks tripped.
+			Boot sector looks like a standard data-disk sector.
 		</p>
 	</article>
 </template>
