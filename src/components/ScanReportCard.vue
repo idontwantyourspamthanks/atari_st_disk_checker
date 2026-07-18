@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ScanReport, ScanStatus } from '../lib/scan/scanner'
+import type { ScanFinding, ScanReport, ScanStatus } from '../lib/scan/scanner'
 import HexView from './HexView.vue'
 
 const props = defineProps<{ report: ScanReport }>()
@@ -16,6 +16,8 @@ const statusGlyph: Record<ScanStatus, string> = {
 }
 
 const showHex = ref(false)
+/** One control expands every finding's detail for this disk image. */
+const detailsOpen = ref(false)
 
 // Aggregate every finding's highlightOffsets into a single list for the
 // hex viewer — so toggling the view shows all the bytes any detector
@@ -42,12 +44,35 @@ function toggleHex() {
 	showHex.value = !showHex.value
 }
 
-function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infectionStatus']>): string {
+function toggleDetails() {
+	detailsOpen.value = !detailsOpen.value
+}
+
+function infectionLabel(status: NonNullable<ScanFinding['infectionStatus']>): string {
 	switch (status) {
 		case 'infected':          return 'INFECTED'
 		case 'probably-infected': return 'PROBABLE'
 		case 'immunized':         return 'IMMUNIZED'
 		case 'unclear':           return 'UNCLEAR'
+	}
+}
+
+/** Compact kind glyph — colour comes from severity/kind CSS. */
+function kindIcon(kind: ScanFinding['kind']): string {
+	switch (kind) {
+		case 'signature': return '!'
+		case 'protector': return 'P'
+		case 'sandbox':   return 'E'
+		case 'heuristic': return '?'
+	}
+}
+
+function kindLabel(kind: ScanFinding['kind']): string {
+	switch (kind) {
+		case 'signature': return 'Virus signature'
+		case 'protector': return 'Boot protector'
+		case 'sandbox':   return 'Sandbox execution'
+		case 'heuristic': return 'Heuristic flag'
 	}
 }
 </script>
@@ -89,29 +114,43 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 			:highlight-offsets="highlightOffsets"
 		/>
 
-		<ul v-if="report.findings.length > 0" class="scan-card__findings">
-			<li
-				v-for="finding in report.findings"
-				:key="finding.name"
-				:class="`finding finding--${finding.severity} finding--${finding.kind}`"
-			>
-				<div class="finding__head">
-					<span class="finding__kind">{{
-						finding.kind === 'signature' ? 'VIRUS'
-						: finding.kind === 'protector' ? 'PROT'
-						: finding.kind === 'sandbox' ? 'EXEC'
-						: 'FLAG'
-					}}</span>
-					<span class="finding__name">{{ finding.name }}</span>
-					<span
-						v-if="finding.infectionStatus"
-						class="finding__infection"
-						:class="`finding__infection--${finding.infectionStatus}`"
-					>{{ infectionLabel(finding.infectionStatus) }}</span>
-				</div>
-				<p class="finding__detail">{{ finding.detail }}</p>
-			</li>
-		</ul>
+		<div v-if="report.findings.length > 0" class="scan-card__findings-wrap">
+			<div class="scan-card__findings-bar">
+				<span class="scan-card__findings-count">
+					{{ report.findings.length }}
+					{{ report.findings.length === 1 ? 'finding' : 'findings' }}
+				</span>
+				<button
+					type="button"
+					class="scan-card__details-toggle"
+					:aria-expanded="detailsOpen"
+					@click="toggleDetails"
+				>{{ detailsOpen ? 'Hide details' : 'Show details' }}</button>
+			</div>
+
+			<ul class="scan-card__findings">
+				<li
+					v-for="finding in report.findings"
+					:key="finding.name"
+					:class="`finding finding--${finding.severity} finding--${finding.kind}`"
+				>
+					<div class="finding__tldr">
+						<span
+							class="finding__icon"
+							:title="kindLabel(finding.kind)"
+							:aria-label="kindLabel(finding.kind)"
+						>{{ kindIcon(finding.kind) }}</span>
+						<span class="finding__name">{{ finding.name }}</span>
+						<span
+							v-if="finding.infectionStatus"
+							class="finding__infection"
+							:class="`finding__infection--${finding.infectionStatus}`"
+						>{{ infectionLabel(finding.infectionStatus) }}</span>
+					</div>
+					<p v-if="detailsOpen" class="finding__detail">{{ finding.detail }}</p>
+				</li>
+			</ul>
+		</div>
 
 		<p v-else-if="!report.error" class="scan-card__nofindings muted">
 			No signatures matched and no heuristics tripped. Boot sector looks like
@@ -242,6 +281,45 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 	color: var(--color-st-green);
 }
 
+.scan-card__findings-wrap {
+	border-top: 2px solid var(--color-panel-dim);
+}
+
+.scan-card__findings-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	padding: 0.4rem 1rem;
+	background: var(--color-panel-dim);
+}
+
+.scan-card__findings-count {
+	font-family: var(--font-pixel);
+	font-size: var(--text-xs);
+	color: var(--color-muted);
+}
+
+.scan-card__details-toggle {
+	background: transparent;
+	border: 1px solid var(--color-ink);
+	color: var(--color-ink);
+	font-family: var(--font-pixel);
+	font-size: var(--text-xs);
+	padding: 0.25rem 0.5rem;
+	cursor: pointer;
+	box-shadow: var(--shadow-gem-sm);
+}
+
+.scan-card__details-toggle:hover {
+	background: var(--color-panel);
+}
+
+.scan-card__details-toggle:focus-visible {
+	outline: 2px solid var(--color-st-green);
+	outline-offset: 2px;
+}
+
 .scan-card__findings {
 	list-style: none;
 	margin: 0;
@@ -249,49 +327,59 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 }
 
 .finding {
-	padding: 0.75rem 1rem;
+	padding: 0.45rem 1rem;
 	border-top: 1px solid var(--color-panel-dim);
+	border-left: 4px solid transparent;
 }
 
-.finding--high    { background: rgba(196, 40, 40, 0.08); }
-.finding--medium  { background: rgba(196, 122, 0, 0.08); }
-.finding--low     { background: var(--color-st-green-soft); }
-.finding--info    { background: rgba(42, 111, 151, 0.08); }
+.finding--high    { border-left-color: var(--color-danger);  background: rgba(196, 40, 40, 0.06); }
+.finding--medium  { border-left-color: var(--color-warning); background: rgba(196, 122, 0, 0.06); }
+.finding--low     { border-left-color: var(--color-st-green); background: var(--color-st-green-soft); }
+.finding--info    { border-left-color: #2a6f97; background: rgba(42, 111, 151, 0.06); }
 
-.finding--protector .finding__kind { background: #2a6f97; color: #fff; }
-.finding--sandbox .finding__kind { background: #5a4a8a; color: #fff; }
-
-.finding__head {
+.finding__tldr {
 	display: flex;
-	align-items: baseline;
-	gap: 0.75rem;
-	margin-bottom: 0.4rem;
-	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.6rem;
+	min-width: 0;
 }
 
-.finding__kind {
+.finding__icon {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
 	font-family: var(--font-pixel);
 	font-size: var(--text-xs);
-	padding: 0.15rem 0.4rem;
 	background: var(--color-ink);
 	color: var(--color-panel);
 }
 
-.finding--high .finding__kind   { background: var(--color-danger); color: #fff; }
-.finding--medium .finding__kind { background: var(--color-warning); color: #000; }
-.finding--low .finding__kind    { background: var(--color-st-green); color: var(--color-on-accent); }
+.finding--high .finding__icon   { background: var(--color-danger); color: #fff; }
+.finding--medium .finding__icon { background: var(--color-warning); color: #000; }
+.finding--low .finding__icon    { background: var(--color-st-green); color: var(--color-on-accent); }
+.finding--info .finding__icon   { background: #2a6f97; color: #fff; }
+
+.finding--protector.finding--info .finding__icon,
+.finding--protector .finding__icon { background: #2a6f97; color: #fff; }
+.finding--sandbox .finding__icon { background: #5a4a8a; color: #fff; }
 
 .finding__name {
+	flex: 1;
+	min-width: 0;
 	font-family: var(--font-pixel);
 	font-size: var(--text-sm);
 	color: var(--color-ink);
+	line-height: 1.35;
 }
 
 .finding__infection {
-	margin-left: auto;
+	flex: 0 0 auto;
 	font-family: var(--font-pixel);
 	font-size: var(--text-xs);
-	padding: 0.15rem 0.4rem;
+	padding: 0.15rem 0.35rem;
 	border: 1px solid;
 }
 
@@ -301,7 +389,7 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 .finding__infection--unclear           { color: var(--color-muted);    border-color: var(--color-muted);    background: rgba(61, 92, 64, 0.12); }
 
 .finding__detail {
-	margin: 0;
+	margin: 0.45rem 0 0 2.1rem;
 	font-family: var(--font-mono);
 	font-size: 0.95rem;
 	line-height: 1.4;
@@ -322,8 +410,16 @@ function infectionLabel(status: NonNullable<ScanReport['findings'][number]['infe
 		gap: 0.5rem;
 		padding: 0.5rem 0.75rem;
 	}
-	.scan-card__meta, .finding, .scan-card__nofindings, .scan-card__error {
-		padding: 0.5rem 0.75rem;
+	.scan-card__meta,
+	.finding,
+	.scan-card__nofindings,
+	.scan-card__error,
+	.scan-card__findings-bar {
+		padding-left: 0.75rem;
+		padding-right: 0.75rem;
+	}
+	.finding__detail {
+		margin-left: 0;
 	}
 }
 </style>

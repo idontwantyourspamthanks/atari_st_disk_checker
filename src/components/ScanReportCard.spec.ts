@@ -28,7 +28,7 @@ describe('ScanReportCard', () => {
 		expect(wrapper.find('.scan-card--clean').exists()).toBe(true)
 	})
 
-	it('applies the protected status class and shows PROT findings', () => {
+	it('applies the protected status class and shows PROT findings as TLDR', () => {
 		const report = baseReport({
 			status: 'protected',
 			findings: [{
@@ -40,8 +40,9 @@ describe('ScanReportCard', () => {
 		})
 		const wrapper = mount(ScanReportCard, { props: { report } })
 		expect(wrapper.find('.scan-card--protected').exists()).toBe(true)
-		expect(wrapper.text()).toContain('PROT')
-		expect(wrapper.text()).toContain('Sagrotan')
+		expect(wrapper.find('.finding--protector .finding__icon').text()).toBe('P')
+		expect(wrapper.find('.finding__name').text()).toBe('Sagrotan')
+		expect(wrapper.find('.finding__detail').exists()).toBe(false)
 	})
 
 	it('applies the infected status class and shows findings when there are signatures', () => {
@@ -59,7 +60,47 @@ describe('ScanReportCard', () => {
 		expect(wrapper.find('.scan-card--infected').exists()).toBe(true)
 		expect(wrapper.find('.finding--signature').exists()).toBe(true)
 		expect(wrapper.find('.finding__name').text()).toBe('Pentagon')
-		expect(wrapper.find('.finding__kind').text()).toBe('VIRUS')
+		expect(wrapper.find('.finding__icon').text()).toBe('!')
+	})
+
+	it('hides finding details until Show details is clicked', async () => {
+		const report = baseReport({
+			status: 'infected',
+			findings: [
+				{
+					kind: 'signature',
+					name: 'Pentagon',
+					detail: 'Matched signature string "PENTAGON" at offset 0x80.',
+					severity: 'high',
+				},
+				{
+					kind: 'heuristic',
+					name: 'Executable boot sector',
+					detail: 'Checksum is 0x1234 so TOS would run this boot code.',
+					severity: 'medium',
+				},
+			],
+		})
+		const wrapper = mount(ScanReportCard, { props: { report } })
+
+		expect(wrapper.find('.scan-card__findings-count').text()).toContain('2 findings')
+		expect(wrapper.findAll('.finding__detail')).toHaveLength(0)
+
+		const toggle = wrapper.find('.scan-card__details-toggle')
+		expect(toggle.text()).toBe('Show details')
+		expect(toggle.attributes('aria-expanded')).toBe('false')
+
+		await toggle.trigger('click')
+
+		expect(toggle.text()).toBe('Hide details')
+		expect(toggle.attributes('aria-expanded')).toBe('true')
+		const details = wrapper.findAll('.finding__detail')
+		expect(details).toHaveLength(2)
+		expect(details[0]!.text()).toContain('PENTAGON')
+		expect(details[1]!.text()).toContain('Checksum is 0x1234')
+
+		await toggle.trigger('click')
+		expect(wrapper.findAll('.finding__detail')).toHaveLength(0)
 	})
 
 	it('shows the "no findings" message for a clean image', () => {
