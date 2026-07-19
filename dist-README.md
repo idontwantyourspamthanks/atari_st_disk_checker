@@ -7,6 +7,15 @@ A small in-browser toolkit for Atari ST files and disk images. Two tools:
 - **Scan** — scan `.ST` / `.MSA` / `.STX` images (or a ZIP of them) for Atari ST
   boot-sector viruses.
 
+The scanner checks each disk's boot sector four ways: behavioural
+heuristics (reset-proofing, vector hooks, encryption, MS-DOS disguise),
+a signature database of ~40 catalogued ST viruses, a database of known
+antivirus bootblocks so those aren't false alarms, and a 68000 sandbox
+that actually *executes* the boot sector to catch viruses that hide by
+relocating, decrypting, or writing themselves back to disk. Verdicts are
+`infected` / `suspicious` / `protected` / `clean`, with the exact bytes
+behind each finding shown in a hex viewer.
+
 Everything runs entirely in your browser. No server, no accounts, no uploads —
 your bytes stay on your machine.
 
