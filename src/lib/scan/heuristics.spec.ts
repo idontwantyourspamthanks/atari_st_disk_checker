@@ -217,6 +217,72 @@ describe('runHeuristics', () => {
 	})
 })
 
+describe('evasion heuristics', () => {
+	it('flags a TOS-executable sector with an MS-DOS jump entry (Zorro/Pharaoh class)', () => {
+		const boot = buildExecutableBootSector('ZORRO_PAYLOAD_BYTES_HERE')
+		boot[0] = 0xEB // JMP rel8 — the DOS short jump
+		boot[1] = 0x3C
+		boot[2] = 0x90 // NOP
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const mimic = findings.find(f => f.id === 'msdos-mimic')
+		expect(mimic).toBeDefined()
+		expect(mimic!.severity).toBe('medium')
+	})
+
+	it('flags a TOS-executable sector carrying MS-DOS OEM text', () => {
+		const boot = buildExecutableBootSector('PHARAOH_PAYLOAD_HERE')
+		Buffer.from(boot.buffer, boot.byteOffset, boot.byteLength).write('MSDOS5.0', 3, 'latin1')
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		expect(findings.find(f => f.id === 'msdos-mimic')).toBeDefined()
+	})
+
+	it('does not flag the non-executable mtools FAT12 disk (EB 3C 90 + FAT12 label)', () => {
+		// Real PC-formatted data disks are DOS-shaped but not TOS-executable —
+		// the disguise heuristic must stay quiet for them.
+		const findings = runHeuristics(loadStBoot())
+		expect(findings.find(f => f.id === 'msdos-mimic')).toBeUndefined()
+	})
+
+	it('flags executable boot code with an implausible BPB', () => {
+		const boot = buildExecutableBootSector('BPKILLER_PAYLOAD_BYTES')
+		Buffer.from(boot.buffer, boot.byteOffset, boot.byteLength).writeUInt16LE(1024, 0x0B)
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const corrupt = findings.find(f => f.id === 'executable-corrupt-bpb')
+		expect(corrupt).toBeDefined()
+		expect(corrupt!.severity).toBe('medium')
+		// The low-severity geometry note fires alongside it.
+		expect(findings.find(f => f.id === 'odd-geometry')).toBeDefined()
+	})
+
+	it('does not flag executable boot code with a sane BPB', () => {
+		const findings = runHeuristics(buildExecutableBootSector('SANE'))
+		expect(findings.find(f => f.id === 'executable-corrupt-bpb')).toBeUndefined()
+	})
+
+	it('flags a BRA.B entry that lands outside the code region', () => {
+		const boot = buildExecutableBootSector('TAMPERED')
+		boot[1] = 0x10 // BRA.B to 0x12 — into the BPB
+		fixBootSectorChecksum(boot)
+
+		const findings = runHeuristics(boot)
+		const bra = findings.find(f => f.id === 'bra-target-out-of-range')
+		expect(bra).toBeDefined()
+		expect(bra!.severity).toBe('low')
+	})
+
+	it('accepts a normal BRA.B over the BPB', () => {
+		// buildExecutableBootSector starts 60 3C → target 0x3E, inside [0x1E, 0x1FE).
+		const findings = runHeuristics(buildExecutableBootSector('NORMAL'))
+		expect(findings.find(f => f.id === 'bra-target-out-of-range')).toBeUndefined()
+	})
+})
+
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2, info: 3 } as const
 function bySeverityOrder(a: keyof typeof SEVERITY_ORDER, b: keyof typeof SEVERITY_ORDER): number {
 	return SEVERITY_ORDER[a] - SEVERITY_ORDER[b]

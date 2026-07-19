@@ -7,19 +7,42 @@ export const WATCHED_VECTORS = [
 	{ addr: 0x0084, name: 'Trap #1 (GEMDOS)' },
 	{ addr: 0x00b4, name: 'Trap #13 (BIOS)' },
 	{ addr: 0x00b8, name: 'Trap #14 (XBIOS)' },
+	{ addr: 0x0400, name: 'etv_timer' },
+	{ addr: 0x0404, name: 'etv_critic' },
+	{ addr: 0x0408, name: 'etv_term' },
 	{ addr: 0x0426, name: 'resvalid' },
 	{ addr: 0x042a, name: 'resvector' },
+	{ addr: 0x0432, name: '_membot' },
+	{ addr: 0x0436, name: '_memtop' },
 	{ addr: 0x0472, name: 'hdv_bpb' },
 	{ addr: 0x0476, name: 'hdv_rw' },
 	{ addr: 0x047a, name: 'hdv_boot' },
 	{ addr: 0x047e, name: 'hdv_mediach' },
 ] as const
 
+/** RAM-limit system variables — written to carve out a hiding place, not to hook a vector. */
+export const RAM_LIMIT_ADDRS: ReadonlySet<number> = new Set([0x0432, 0x0436])
+
 export interface SandboxWrite {
 	addr: number
 	name: string
 	value: number
 	/** Instruction count when the write happened. */
+	atInstruction: number
+}
+
+/**
+ * A trapped attempt to WRITE the boot sector back to the floppy — the
+ * defining self-propagation behaviour of a boot-sector virus.
+ */
+export interface BootWriteAttempt {
+	/** Which OS call was used ('BIOS Rwabs' or 'XBIOS Flopwr'). */
+	via: string
+	/** Buffer the sector would be written from. */
+	buf: number
+	/** Sector count requested. */
+	count: number
+	/** Instruction count when the call happened. */
 	atInstruction: number
 }
 
@@ -38,11 +61,13 @@ export interface SandboxResult {
 	haltReason: 'return' | 'limit' | 'loop' | 'stray' | 'unsupported' | 'error' | 'not-executable'
 	/** Vector / system-var writes observed. */
 	writes: SandboxWrite[]
+	/** Boot-sector write attempts observed via BIOS/XBIOS traps. */
+	bootWrites: BootWriteAttempt[]
 	/** True if resvalid was set to π ($31415926). */
 	resetProofMagic: boolean
 	/** True if resvector was written. */
 	resetProofVector: boolean
-	/** Names of trap/hdv vectors that were written. */
+	/** Names of trap/hdv/etv vectors that were written (excludes resvalid/resvector/RAM limits). */
 	hooks: string[]
 	/**
 	 * Virus signatures found in RAM after the run (relocated / decrypted
@@ -115,6 +140,7 @@ export function runBootSandbox(
 	mem.set(boot.subarray(0, BOOT_SECTOR_SIZE), BOOT_LOAD_ADDR)
 
 	const writes: SandboxWrite[] = []
+	const bootWrites: BootWriteAttempt[] = []
 	const seen = new Set<string>()
 	const dirtyPages = new Set<number>()
 	let instructions = 0
@@ -155,7 +181,8 @@ export function runBootSandbox(
 		}
 	})
 
-	cpu.trapHandler = (trapNo, c) => handleTrap(trapNo, c, mem, dirtyPages)
+	cpu.trapHandler = (trapNo, c) =>
+		handleTrap(trapNo, c, { mem, dirtyPages, bootWrites, atInstruction: () => instructions })
 
 	cpu.pc = BOOT_LOAD_ADDR
 	cpu.sp = STACK_TOP
@@ -214,6 +241,7 @@ export function runBootSandbox(
 			instructions,
 			haltReason: e instanceof M68kError ? 'unsupported' : 'error',
 			writes,
+			bootWrites,
 			resetProofMagic: hasPi(writes),
 			resetProofVector: writes.some(w => w.addr === 0x042a),
 			hooks: hookNames(writes),
@@ -231,6 +259,7 @@ export function runBootSandbox(
 			instructions,
 			haltReason,
 			writes,
+			bootWrites,
 			resetProofMagic: hasPi(writes),
 			resetProofVector: writes.some(w => w.addr === 0x042a),
 			hooks: hookNames(writes),
@@ -251,6 +280,7 @@ function emptyResult(
 		instructions: 0,
 		haltReason,
 		writes: [],
+		bootWrites: [],
 		resetProofMagic: false,
 		resetProofVector: false,
 		hooks: [],
@@ -267,21 +297,33 @@ function hookNames(writes: SandboxWrite[]): string[] {
 	const names = new Set<string>()
 	for (const w of writes) {
 		if (w.addr === 0x0426 || w.addr === 0x042a) continue
+		// RAM-limit writes are hiding behaviour, not a vector hook — reported separately.
+		if (RAM_LIMIT_ADDRS.has(w.addr)) continue
 		names.add(w.name)
 	}
 	return [...names]
 }
 
+/** Context handed to the trap stub so it can record side effects. */
+interface TrapContext {
+	mem: Uint8Array
+	dirtyPages: Set<number>
+	bootWrites: BootWriteAttempt[]
+	atInstruction: () => number
+}
+
 /**
  * BIOS / XBIOS / GEMDOS stubs. Enough for install paths that re-read the
  * boot sector or probe disk presence. Returns success (D0=0) by default.
+ * WRITE calls targeting the boot sector are recorded as propagation attempts
+ * (and still succeed, so the code keeps running and reveals more).
  */
 function handleTrap(
 	trapNo: number,
 	cpu: M68k,
-	mem: Uint8Array,
-	dirtyPages: Set<number>,
+	ctx: TrapContext,
 ): void {
+	const { mem, dirtyPages, bootWrites } = ctx
 	if (trapNo === 13) {
 		// BIOS — function in D0.W
 		const fn = cpu.d[0]! & 0xffff
@@ -293,6 +335,14 @@ function handleTrap(
 			const recno = cpu.read16(cpu.sp + 8)
 			if ((rwflag & 1) === 0 && recno === 0 && count > 0) {
 				copyBootTo(mem, buf, dirtyPages)
+			}
+			if ((rwflag & 1) !== 0 && recno === 0 && count > 0) {
+				bootWrites.push({
+					via: 'BIOS Rwabs',
+					buf: buf >>> 0,
+					count,
+					atInstruction: ctx.atInstruction(),
+				})
 			}
 		}
 		cpu.d[0] = 0
@@ -308,6 +358,14 @@ function handleTrap(
 			const track = cpu.read16(cpu.sp + 14)
 			if (fn === 8 && track === 0 && sector === 1) {
 				copyBootTo(mem, buf, dirtyPages)
+			}
+			if (fn === 9 && track === 0 && sector === 1) {
+				bootWrites.push({
+					via: 'XBIOS Flopwr',
+					buf: buf >>> 0,
+					count: cpu.read16(cpu.sp + 16),
+					atInstruction: ctx.atInstruction(),
+				})
 			}
 		}
 		cpu.d[0] = 0
@@ -422,6 +480,8 @@ export function shouldScanHighRam(
 	writes: SandboxWrite[],
 ): boolean {
 	if (hasPi(writes) || writes.some(w => w.addr === 0x042a)) return true
+	// RAM-limit tampering is exactly how code reserves a hideout under phystop.
+	if (writes.some(w => RAM_LIMIT_ADDRS.has(w.addr))) return true
 	if (hookNames(writes).length > 0) return true
 	const bootLo = BOOT_LOAD_ADDR >>> DIRTY_PAGE_SHIFT
 	const bootHi = (BOOT_LOAD_ADDR + BOOT_SECTOR_SIZE - 1) >>> DIRTY_PAGE_SHIFT

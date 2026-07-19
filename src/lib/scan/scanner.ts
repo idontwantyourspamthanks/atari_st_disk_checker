@@ -12,7 +12,7 @@ import {
 	type HeuristicFinding,
 } from './heuristics'
 import { runBootSandbox, BOOT_LOAD_ADDR, type SandboxResult } from './sandbox/bootSandbox'
-import { matchSignatures, type SignatureMatch } from './signatures'
+import { matchSignatures, parseMaskedHex, type SignatureMatch } from './signatures'
 import { matchProtectors } from './protectors'
 import type { ProtectorMatch } from './protectors'
 import { isStx } from '../disk/stx'
@@ -198,6 +198,14 @@ function toSignatureFinding(match: SignatureMatch, bootLength: number, infection
 				highlightOffsets.push(match.offset + i)
 			}
 		}
+	} else if (match.matched.kind === 'masked') {
+		// Highlight only the (partially) exact bytes — wildcards carry no evidence.
+		const parsed = parseMaskedHex(match.matched.hex)
+		for (let i = 0; i < parsed.bytes.length; i++) {
+			if (parsed.mask[i] !== 0 && match.offset + i < bootLength) {
+				highlightOffsets.push(match.offset + i)
+			}
+		}
 	} else if (match.matched.kind === 'ascii' && match.offset >= 0) {
 		for (let i = 0; i < match.matched.text.length; i++) {
 			if (match.offset + i < bootLength) {
@@ -211,7 +219,9 @@ function toSignatureFinding(match: SignatureMatch, bootLength: number, infection
 			? `string "${match.matched.text}"`
 			: match.matched.kind === 'bytes-scan'
 				? `byte sequence at offset 0x${match.offset.toString(16)}`
-				: `byte pattern at offset 0x${match.matched.offset.toString(16)}`
+				: match.matched.kind === 'masked'
+					? `masked pattern "${match.matched.hex}" at offset 0x${match.offset.toString(16)}`
+					: `byte pattern at offset 0x${match.matched.offset.toString(16)}`
 	parts.push(`Matched ${matchDesc}.`)
 	parts.push(`Assessment: ${infectionLabel(infectionStatus)}.`)
 	if (infectionStatus === 'immunized') {
@@ -363,6 +373,36 @@ export function sandboxToFindings(result: SandboxResult): ScanFinding[] {
 				`(${result.instructions} instructions, ${result.haltReason}). ` +
 				`Typical of memory-resident boot viruses (and some protectors / loaders).`,
 			severity: 'high',
+		})
+	}
+
+	if (result.bootWrites.length > 0) {
+		const first = result.bootWrites[0]!
+		out.push({
+			kind: 'sandbox',
+			name: 'Sandbox: boot-sector write attempt',
+			detail:
+				`While executing, the boot code called ${first.via} to WRITE sector 0 ` +
+				`(the boot sector) back to the floppy` +
+				(result.bootWrites.length > 1 ? ` — ${result.bootWrites.length} write attempts observed` : '') +
+				`. That is self-propagation: the defining behaviour of a boot-sector virus. ` +
+				`Ran ${result.instructions} instructions (${result.haltReason}).`,
+			severity: 'high',
+		})
+	}
+
+	const ramWrites = result.writes.filter(w => w.addr === 0x0432 || w.addr === 0x0436)
+	if (ramWrites.length > 0) {
+		const parts = ramWrites.map(w => `${w.name} ($${w.addr.toString(16)}) = $${w.value.toString(16)}`)
+		out.push({
+			kind: 'sandbox',
+			name: 'Sandbox: RAM limit modified',
+			detail:
+				`Boot code wrote ${parts.join('; ')} during sandbox execution ` +
+				`(${result.instructions} instructions, ${result.haltReason}). ` +
+				`Lowering _memtop (or raising _membot) is how resident code carves out ` +
+				`a hiding place that survives program launches.`,
+			severity: 'medium',
 		})
 	}
 

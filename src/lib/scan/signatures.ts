@@ -14,7 +14,11 @@
  * DETECTION MODEL
  *
  * Each signature carries one or more `patterns`. The matcher fires a match
- * if ANY pattern in the list matches. Prefer distinctive payload strings
+ * if ANY pattern in the list matches. Pattern kinds: exact `bytes` at a
+ * fixed offset, case-insensitive `ascii`, `bytes-scan` anywhere, and
+ * `masked` (YARA-lite hex with `??` / nibble wildcards, anchored or
+ * scanning) for polymorphic families whose exact bytes vary per copy.
+ * Prefer distinctive payload strings
  * and magic constants over UVK "immunization" bytes: those markers are
  * often just a short BRA over the BPB (e.g. `0x60 0x1C`) shared by many
  * viruses *and* by unrelated boot loaders. Using them as positive IDs
@@ -54,7 +58,19 @@ export type BytesScanPattern = {
 	bytes: number[]
 }
 
-export type Pattern = BytePattern | AsciiPattern | BytesScanPattern
+/**
+ * YARA-lite masked byte pattern for polymorphic families: space-separated
+ * hex tokens where `??` is a wildcard byte and `H?` / `?H` are nibble
+ * wildcards (e.g. "20 3C ?? ?? 59 26", "6? 1C"). With `offset` set the
+ * pattern must match anchored there; otherwise it may match anywhere.
+ */
+export type MaskedPattern = {
+	kind: 'masked'
+	hex: string
+	offset?: number
+}
+
+export type Pattern = BytePattern | AsciiPattern | BytesScanPattern | MaskedPattern
 
 export type Confidence = 'verified' | 'probable' | 'speculative'
 
@@ -563,14 +579,81 @@ export function matchSignatures(boot: Uint8Array): SignatureMatch[] {
 	return matches
 }
 
-function matchPattern(boot: Uint8Array, pattern: Pattern): number {
+/** Exported for unit tests. Returns the offset of the first match, or -1. */
+export function matchPattern(boot: Uint8Array, pattern: Pattern): number {
 	if (pattern.kind === 'ascii') {
 		return findAsciiCaseInsensitive(boot, pattern.text)
 	}
 	if (pattern.kind === 'bytes-scan') {
 		return findBytes(boot, pattern.bytes)
 	}
+	if (pattern.kind === 'masked') {
+		const parsed = parseMaskedHex(pattern.hex)
+		if (pattern.offset !== undefined) {
+			return maskedEqualAt(boot, parsed, pattern.offset) ? pattern.offset : -1
+		}
+		return findMaskedBytes(boot, parsed)
+	}
 	return bytesEqualAt(boot, pattern.bytes, pattern.offset) ? pattern.offset : -1
+}
+
+export interface ParsedMask {
+	bytes: number[]
+	/** Per-byte nibble mask: 0xFF exact, 0xF0/0x0F nibble-exact, 0x00 wildcard. */
+	mask: number[]
+}
+
+/** Parse a masked-pattern hex string, validating every token. Throws on malformed input. */
+export function parseMaskedHex(hex: string): ParsedMask {
+	const cached = maskCache.get(hex)
+	if (cached) return cached
+	const tokens = hex.trim().split(/\s+/)
+	if (tokens.length === 0 || tokens[0] === '') {
+		throw new Error(`masked pattern is empty`)
+	}
+	const bytes: number[] = []
+	const mask: number[] = []
+	for (const token of tokens) {
+		if (!/^[0-9a-fA-F?]{2}$/.test(token)) {
+			throw new Error(`bad masked-pattern token "${token}" (want "HH", "??", "H?" or "?H")`)
+		}
+		let value = 0
+		let m = 0
+		for (const ch of token) {
+			if (ch === '?') {
+				value <<= 4
+				m <<= 4
+			} else {
+				value = (value << 4) | parseInt(ch, 16)
+				m = (m << 4) | 0xf
+			}
+		}
+		bytes.push(value)
+		mask.push(m)
+	}
+	const parsed: ParsedMask = { bytes, mask }
+	maskCache.set(hex, parsed)
+	return parsed
+}
+
+const maskCache = new Map<string, ParsedMask>()
+
+function findMaskedBytes(haystack: Uint8Array, parsed: ParsedMask): number {
+	const n = parsed.bytes.length
+	if (n === 0 || n > haystack.length) return -1
+	for (let i = 0; i + n <= haystack.length; i++) {
+		if (maskedEqualAt(haystack, parsed, i)) return i
+	}
+	return -1
+}
+
+function maskedEqualAt(haystack: Uint8Array, parsed: ParsedMask, offset: number): boolean {
+	const n = parsed.bytes.length
+	if (offset + n > haystack.length) return false
+	for (let j = 0; j < n; j++) {
+		if (((haystack[offset + j]! ^ parsed.bytes[j]!) & parsed.mask[j]!) !== 0) return false
+	}
+	return true
 }
 
 function findBytes(haystack: Uint8Array, needle: number[]): number {

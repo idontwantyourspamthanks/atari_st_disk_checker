@@ -6,13 +6,14 @@
  */
 
 export class M68kError extends Error {
-	constructor(
-		message: string,
-		readonly pc: number,
-		readonly op: number,
-	) {
+	readonly pc: number
+	readonly op: number
+
+	constructor(message: string, pc: number, op: number) {
 		super(`${message} (PC=$${pc.toString(16)} op=$${op.toString(16).padStart(4, '0')})`)
 		this.name = 'M68kError'
+		this.pc = pc
+		this.op = op
 	}
 }
 
@@ -33,10 +34,13 @@ export class M68k {
 	/** Line-F opcodes soft-stubbed this run. */
 	lineFCalls: number[] = []
 
-	constructor(
-		readonly mem: Uint8Array,
-		readonly onWrite?: MemWriteHook,
-	) {}
+	constructor(mem: Uint8Array, onWrite?: MemWriteHook) {
+		this.mem = mem
+		this.onWrite = onWrite
+	}
+
+	readonly mem: Uint8Array
+	readonly onWrite?: MemWriteHook
 
 	get sp(): number {
 		return this.a[7]!

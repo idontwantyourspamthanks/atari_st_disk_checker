@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchSignatures, SIGNATURES } from './signatures'
+import { matchSignatures, matchPattern, parseMaskedHex, SIGNATURES } from './signatures'
 import { BOOT_SECTOR_SIZE } from './bootSector'
 
 describe('matchSignatures', () => {
@@ -120,10 +120,81 @@ describe('matchSignatures', () => {
 				} else if (p.kind === 'bytes-scan') {
 					expect(p.bytes.length).toBeGreaterThan(0)
 					expect(p.bytes.length).toBeLessThanOrEqual(BOOT_SECTOR_SIZE)
+				} else if (p.kind === 'masked') {
+					const parsed = parseMaskedHex(p.hex)
+					expect(parsed.bytes.length).toBeGreaterThan(0)
+					expect(parsed.bytes.length).toBeLessThanOrEqual(BOOT_SECTOR_SIZE)
+					// An all-wildcard pattern matches everything — never useful.
+					expect(parsed.mask.some(m => m !== 0)).toBe(true)
+					if (p.offset !== undefined) {
+						expect(p.offset).toBeGreaterThanOrEqual(0)
+						expect(p.offset + parsed.bytes.length).toBeLessThanOrEqual(BOOT_SECTOR_SIZE)
+					}
 				} else {
 					expect(p.text.length).toBeGreaterThan(0)
 				}
 			}
 		}
+	})
+})
+
+describe('masked patterns', () => {
+	it('matches an exact hex sequence', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0x20, 0x3c, 0x31, 0x41, 0x59, 0x26], 0x40)
+		expect(matchPattern(boot, { kind: 'masked', hex: '20 3C 31 41 59 26' })).toBe(0x40)
+	})
+
+	it('matches with ?? wildcard bytes (scan anywhere)', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		// MOVE.L #π,Dn — the data register varies between Ghost variants.
+		boot.set([0x2a, 0x3c, 0x31, 0x41, 0x59, 0x26], 0x80) // MOVE.L #π,D5
+		expect(matchPattern(boot, { kind: 'masked', hex: '2? 3C 31 41 59 26' })).toBe(0x80)
+	})
+
+	it('matches nibble wildcards (H? and ?H)', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0x60, 0x1c], 0) // BRA.B $1C
+		expect(matchPattern(boot, { kind: 'masked', hex: '6? ??' })).toBe(0)
+		expect(matchPattern(boot, { kind: 'masked', hex: '?0 1C' })).toBe(0)
+		expect(matchPattern(boot, { kind: 'masked', hex: '4? 1C' })).toBe(-1)
+	})
+
+	it('honours the anchor offset when set', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0x60, 0x38], 0)
+		boot.set([0x60, 0x38], 0x40)
+		expect(matchPattern(boot, { kind: 'masked', hex: '60 38', offset: 0 })).toBe(0)
+		expect(matchPattern(boot, { kind: 'masked', hex: '60 38', offset: 0x20 })).toBe(-1)
+	})
+
+	it('does not match when an exact nibble differs', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0x20, 0x3c, 0x31, 0x41, 0x59, 0x27], 0x40) // π+1
+		expect(matchPattern(boot, { kind: 'masked', hex: '20 3C 31 41 59 26' })).toBe(-1)
+	})
+
+	it('masked Ghost π-write does not match the bare π longword', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		// Bare π only (Anti-Ghost CMP immediate) — no preceding 2? 3C opcode.
+		boot.set([0x31, 0x41, 0x59, 0x26], 0x36)
+		expect(matchPattern(boot, { kind: 'masked', hex: '2? 3C 31 41 59 26' })).toBe(-1)
+	})
+
+	it('parses hex case-insensitively and rejects malformed tokens', () => {
+		expect(parseMaskedHex('2a 3C ?? 4?')).toEqual({
+			bytes: [0x2a, 0x3c, 0x00, 0x40],
+			mask: [0xff, 0xff, 0x00, 0xf0],
+		})
+		expect(() => parseMaskedHex('20 3')).toThrow()
+		expect(() => parseMaskedHex('zz zz')).toThrow()
+		expect(() => parseMaskedHex('')).toThrow()
+	})
+
+	it('does not run past the end of the sector', () => {
+		const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+		boot.set([0xaa], BOOT_SECTOR_SIZE - 1)
+		expect(matchPattern(boot, { kind: 'masked', hex: 'AA BB' })).toBe(-1)
+		expect(matchPattern(boot, { kind: 'masked', hex: 'AA BB', offset: BOOT_SECTOR_SIZE - 1 })).toBe(-1)
 	})
 })

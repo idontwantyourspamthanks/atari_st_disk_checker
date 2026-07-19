@@ -124,6 +124,53 @@ export function runHeuristics(boot: Uint8Array): HeuristicFinding[] {
 		})
 	}
 
+	// MS-DOS disguise: TOS-executable (checksum 0x1234) yet shaped like a PC
+	// boot sector. Zorro A and Pharaoh are documented to fake MS-DOS boot
+	// sectors so PC-style virus killers skip them (and casual dumps look
+	// foreign); Macumba 5.2 starts $EB 90 90. A genuine ST boot virus starts
+	// with a 68000 branch — this entry shape is never normal on TOS.
+	if (executable) {
+		const dosJump =
+			(boot[0] === 0xEB && boot[2] === 0x90) || // JMP rel8 + NOP (DOS signature)
+			boot[0] === 0xE9 // JMP rel16
+		const oemHit = findDosOemText(boot)
+		if (dosJump || oemHit !== -1) {
+			const oemRange = oemHit === -1 ? [] : [0, 1, 2, 3, 4].map(i => oemHit + i)
+			findings.push({
+				id: 'msdos-mimic',
+				headline: 'Executable boot sector mimics MS-DOS',
+				detail:
+					`The checksum says TOS should execute this sector, but it is dressed up ` +
+					`as a PC boot sector (` +
+					(dosJump ? 'MS-DOS jump instruction at offset 0' : `MS-DOS OEM text at offset 0x${oemHit.toString(16)}`) +
+					`). Zorro A and Pharaoh use exactly this disguise to evade virus killers. ` +
+					`A real ST bootable disk starts with 68000 branch code, not PC glue.`,
+				severity: 'medium',
+				highlightOffsets: dosJump ? [0, 1, 2] : oemRange,
+			})
+		}
+	}
+
+	// BRA.B entry that jumps outside the post-BPB code region — into the BPB,
+	// the checksum word, or off the sector entirely. Normal ST boot sectors
+	// branch over the BPB to 0x1E+; a weird target smells like tampering.
+	if (boot[0] === 0x60 && boot[1] !== 0x00) {
+		const disp = (boot[1]! << 24) >> 24 // sign-extend
+		const target = 2 + disp
+		if (target < BOOT_CODE_REGION_START || target >= BOOT_CODE_REGION_END) {
+			findings.push({
+				id: 'bra-target-out-of-range',
+				headline: 'Entry branch leaves the code region',
+				detail:
+					`The BRA.B at offset 0 jumps to offset 0x${(target & 0xffff).toString(16)}, ` +
+					`outside the post-BPB code region [0x1E, 0x1FE). That is either a broken ` +
+					`boot sector or an entry point deliberately hidden where scanners don't look.`,
+				severity: 'low',
+				highlightOffsets: [0, 1],
+			})
+		}
+	}
+
 	const resvalidOffset = findBytes(boot, RESVALID_MAGIC)
 	if (resvalidOffset !== -1) {
 		// Bare π appears in Anti-Ghost bootblocks as a CMP immediate (they
@@ -227,6 +274,24 @@ export function runHeuristics(boot: Uint8Array): HeuristicFinding[] {
 		}
 	}
 
+	// Executable boot code that doesn't preserve a plausible filesystem
+	// layout: the sector carries runnable code but no usable BPB. Viruses
+	// that only care about propagation often trash the BPB; a real bootable
+	// TOS disk needs its geometry intact to stay readable.
+	if (executable && !saneGeometry) {
+		findings.push({
+			id: 'executable-corrupt-bpb',
+			headline: 'Executable boot sector with implausible BPB',
+			detail:
+				`TOS would run this sector, but the BIOS Parameter Block (bytes-per-sector, ` +
+				`sectors-per-cluster, or sectors-per-FAT) has values no real floppy uses. ` +
+				`Boot viruses frequently ignore or deliberately corrupt the BPB; legitimate ` +
+				`boot loaders keep it valid so the disk stays readable.`,
+			severity: 'medium',
+			highlightOffsets: [0x0b, 0x0d, 0x16],
+		})
+	}
+
 	if (!saneGeometry) {
 		findings.push({
 			id: 'odd-geometry',
@@ -254,6 +319,31 @@ export function runHeuristics(boot: Uint8Array): HeuristicFinding[] {
 	}
 
 	return findings.sort(bySeverity)
+}
+
+/** MS-DOS OEM / filesystem strings a PC-shaped boot sector carries near the BPB start. */
+const DOS_OEM_STRINGS = ['MSDOS', 'MSWIN', 'FAT12', 'FAT16'] as const
+
+/**
+ * Search the OEM/BPB area for MS-DOS branding, case-insensitive. Window is
+ * [0x02, 0x3E): the DOS OEM string sits at offset 3 and the DOS filesystem
+ * label ("FAT12   ") at 0x36 — both inside what is unused/reserved space on
+ * a real ST disk. Returns the offset of the hit, or -1.
+ */
+function findDosOemText(boot: Uint8Array): number {
+	const end = Math.min(boot.length, 0x3e)
+	for (const text of DOS_OEM_STRINGS) {
+		const needle = text.toUpperCase()
+		outer: for (let i = 2; i + needle.length <= end; i++) {
+			for (let j = 0; j < needle.length; j++) {
+				const b = boot[i + j]!
+				const upper = b >= 0x61 && b <= 0x7a ? b - 0x20 : b
+				if (upper !== needle.charCodeAt(j)) continue outer
+			}
+			return i
+		}
+	}
+	return -1
 }
 
 /**

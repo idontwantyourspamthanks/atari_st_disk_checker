@@ -37,6 +37,19 @@ function trivialRtsBoot(): Uint8Array {
 	return boot
 }
 
+/** BRA over a sane BPB with the code region left for the caller to fill at 0x1E. */
+function baseBoot(): Uint8Array {
+	const boot = new Uint8Array(BOOT_SECTOR_SIZE)
+	boot[0] = 0x60
+	boot[1] = 0x1c
+	boot[0x0b] = 0x00
+	boot[0x0c] = 0x02
+	boot[0x0d] = 2
+	boot[0x15] = 0xfd
+	boot[0x16] = 5
+	return boot
+}
+
 function loadVirus(name: string): Uint8Array | null {
 	const path = `${DISKIMAGES}/${name}`
 	if (!existsSync(path)) return null
@@ -224,5 +237,110 @@ describe('runBootSandbox', () => {
 		expect(result.resetProofMagic).toBe(true)
 		expect(result.hooks).toContain('hdv_bpb')
 		expect(result.memorySignatures.some(h => h.name === 'Ghost A')).toBe(true)
+	})
+
+	it('records an XBIOS Flopwr to track 0 sector 1 as a propagation attempt', () => {
+		const boot = baseBoot()
+		// XBIOS Flopwr(buf=$5000, filler=0, dev=0, -=0, sect=1, track=0, count=1)
+		// via the stub's stack layout: fn(0), buf(2), words at 6/8/10, sect(12), track(14), count(16)
+		const code = [
+			0x3f, 0x3c, 0x00, 0x01, // MOVE.W #1,-(SP)      → count
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → track
+			0x3f, 0x3c, 0x00, 0x01, // MOVE.W #1,-(SP)      → sector
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → (unused)
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → dev
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → filler
+			0x2f, 0x3c, 0x00, 0x00, 0x50, 0x00, // MOVE.L #$5000,-(SP) → buf
+			0x3f, 0x3c, 0x00, 0x09, // MOVE.W #9,-(SP)      → fn = Flopwr
+			0x4e, 0x4e, // TRAP #14
+			0xdf, 0xfc, 0x00, 0x00, 0x00, 0x12, // ADDA.L #18,SP
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.haltReason).toBe('return')
+		expect(result.bootWrites).toHaveLength(1)
+		expect(result.bootWrites[0]!.via).toBe('XBIOS Flopwr')
+		expect(result.bootWrites[0]!.buf).toBe(0x5000)
+	})
+
+	it('records a BIOS Rwabs write to logical sector 0 as a propagation attempt', () => {
+		const boot = baseBoot()
+		// BIOS Rwabs(rwflag=1, buf=$5000, count=1, recno=0, dev=0); fn=4 in D0.W (stub convention)
+		const code = [
+			0x70, 0x04, // MOVEQ #4,D0
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → dev
+			0x3f, 0x3c, 0x00, 0x00, // MOVE.W #0,-(SP)      → recno
+			0x3f, 0x3c, 0x00, 0x01, // MOVE.W #1,-(SP)      → count
+			0x2f, 0x3c, 0x00, 0x00, 0x50, 0x00, // MOVE.L #$5000,-(SP) → buf
+			0x3f, 0x3c, 0x00, 0x01, // MOVE.W #1,-(SP)      → rwflag (write)
+			0x4e, 0x4d, // TRAP #13
+			0xdf, 0xfc, 0x00, 0x00, 0x00, 0x0c, // ADDA.L #12,SP
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.bootWrites).toHaveLength(1)
+		expect(result.bootWrites[0]!.via).toBe('BIOS Rwabs')
+	})
+
+	it('does not record Rwabs reads or non-boot-sector writes as propagation', () => {
+		const boot = baseBoot()
+		// Rwabs write (rwflag=1) but recno=80 — data area, not the boot sector.
+		const code = [
+			0x70, 0x04, // MOVEQ #4,D0
+			0x3f, 0x3c, 0x00, 0x00, // dev
+			0x3f, 0x3c, 0x00, 0x50, // recno = 80
+			0x3f, 0x3c, 0x00, 0x01, // count = 1
+			0x2f, 0x3c, 0x00, 0x00, 0x50, 0x00, // buf
+			0x3f, 0x3c, 0x00, 0x01, // rwflag = write
+			0x4e, 0x4d, // TRAP #13
+			0xdf, 0xfc, 0x00, 0x00, 0x00, 0x0c, // ADDA.L #12,SP
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.bootWrites).toEqual([])
+	})
+
+	it('observes _memtop tampering as RAM hiding, not a vector hook', () => {
+		const boot = baseBoot()
+		// MOVE.L #$00080000, $436 — lower _memtop to reserve the top of RAM
+		const code = [
+			0x23, 0xfc, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x04, 0x36,
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.writes.some(w => w.addr === 0x0436 && w.value === 0x00080000)).toBe(true)
+		expect(result.hooks).not.toContain('_memtop')
+		expect(shouldScanHighRam(new Set(), result.writes)).toBe(true)
+	})
+
+	it('observes an etv_critic install as a system vector hook', () => {
+		const boot = baseBoot()
+		// MOVE.L #$00004040, $404 — install critical-error handler
+		const code = [
+			0x23, 0xfc, 0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x04, 0x04,
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x1e)
+		fixChecksum(boot)
+
+		const result = runBootSandbox(boot)
+		expect(result.ran).toBe(true)
+		expect(result.hooks).toContain('etv_critic')
 	})
 })

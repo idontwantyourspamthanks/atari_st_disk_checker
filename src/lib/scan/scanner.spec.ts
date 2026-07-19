@@ -372,4 +372,68 @@ describe('scanImage — heuristic ↔ signature synthesis', () => {
 		expect(report.findings.some(f => f.name.includes('High-entropy'))).toBe(true)
 		expect(report.findings.some(f => f.name.includes('no residency after run'))).toBe(true)
 	})
+
+	it('flags a Zorro-class MS-DOS-mimicking executable boot sector as suspicious', () => {
+		const boot = buildExecutableBootSector('ZORRO_PAYLOAD_DENSE_BYTES_HERE')
+		boot[0] = 0xeb // MS-DOS JMP rel8
+		boot[1] = 0x3c
+		boot[2] = 0x90 // NOP
+		Buffer.from(boot.buffer, boot.byteOffset, boot.byteLength).write('MSDOS5.0', 3, 'latin1')
+		fixBootSectorChecksum(boot)
+
+		const report = scanImage(boot, 'zorro-a.st')
+		expect(report.bootSectorExecutable).toBe(true)
+		expect(report.status).toBe('suspicious')
+		expect(
+			report.findings.some(f => f.kind === 'heuristic' && f.name.includes('mimics MS-DOS')),
+		).toBe(true)
+	})
+
+	it('flags sandbox-observed boot-sector writes as a high-severity propagation finding', () => {
+		const boot = buildExecutableBootSector('PROPAGATOR')
+		// XBIOS Flopwr(buf=$5000, ..., sect=1, track=0, count=1) — see bootSandbox.spec
+		const code = [
+			0x3f, 0x3c, 0x00, 0x01, // count
+			0x3f, 0x3c, 0x00, 0x00, // track
+			0x3f, 0x3c, 0x00, 0x01, // sector
+			0x3f, 0x3c, 0x00, 0x00, // (unused)
+			0x3f, 0x3c, 0x00, 0x00, // dev
+			0x3f, 0x3c, 0x00, 0x00, // filler
+			0x2f, 0x3c, 0x00, 0x00, 0x50, 0x00, // buf
+			0x3f, 0x3c, 0x00, 0x09, // fn = Flopwr
+			0x4e, 0x4e, // TRAP #14
+			0xdf, 0xfc, 0x00, 0x00, 0x00, 0x12, // ADDA.L #18,SP
+			0x4e, 0x75, // RTS
+		]
+		boot.set(code, 0x3e)
+		fixBootSectorChecksum(boot)
+
+		const report = scanImage(boot, 'propagator.st')
+		const finding = report.findings.find(
+			f => f.kind === 'sandbox' && f.name.includes('boot-sector write attempt'),
+		)
+		expect(finding).toBeDefined()
+		expect(finding!.severity).toBe('high')
+		expect(report.status).toBe('suspicious')
+	})
+
+	it('flags sandbox-observed _memtop lowering as RAM hiding', () => {
+		const boot = buildExecutableBootSector('HIDER')
+		// MOVE.L #$00080000, $436; RTS
+		const code = [
+			0x23, 0xfc, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x04, 0x36,
+			0x4e, 0x75,
+		]
+		boot.set(code, 0x3e)
+		fixBootSectorChecksum(boot)
+
+		const report = scanImage(boot, 'hider.st')
+		const finding = report.findings.find(
+			f => f.kind === 'sandbox' && f.name.includes('RAM limit modified'),
+		)
+		expect(finding).toBeDefined()
+		expect(finding!.severity).toBe('medium')
+		// RAM hiding must not be reported as a vector hook.
+		expect(report.findings.some(f => f.name.includes('system vector hook'))).toBe(false)
+	})
 })
