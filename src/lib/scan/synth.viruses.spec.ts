@@ -66,4 +66,24 @@ describe('synthesized bootsector viruses', () => {
 		expect(r.hooks).toContain('hdv_bpb')
 		expect(r.bootWrites.length).toBeGreaterThan(0)
 	})
+
+	it('nerd: propagates in-session but does NOT survive reset', () => {
+		if (!existsSync(join(dir, NERD))) return
+		const { report, boot } = load(NERD)
+
+		expect(report.bootSectorChecksum).toBe(0x1234)
+		expect(report.status).toBe('suspicious')
+		const names = report.findings.map(f => f.name)
+		expect(names).not.toContain('Sandbox: reset-proof install')
+		expect(names).toContain('Sandbox: system vector hook')
+		expect(names).toContain('Sandbox: boot-sector write attempt')
+		expect(bootText(boot)).toContain('this disk is infected by AI nerd magic')
+
+		const r = runBootSandbox(boot)
+		expect(['return', 'loop', 'limit']).toContain(r.haltReason)
+		expect(r.resetProofMagic).toBe(false)
+		expect(r.resetProofVector).toBe(false)
+		expect(r.hooks).toContain('hdv_bpb')
+		expect(r.bootWrites.length).toBeGreaterThan(0)
+	})
 })
