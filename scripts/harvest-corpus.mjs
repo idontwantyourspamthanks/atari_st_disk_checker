@@ -7,7 +7,7 @@
  * Usage: node scripts/harvest-corpus.mjs <cdZipUrl> <label>
  *   e.g. node scripts/harvest-corpus.mjs "https://ftp.pigwa.net/stuff/.../CD1of5.zip" cd1
  *
- * Writes ../diskimages/_staging/<label>/… and candidates.json.
+ * Writes ../diskimages/_staging/<label>/… and candidates-<label>.json.
  * Classification happens in src/lib/scan/harvest.probe.spec.ts (stage 2).
  */
 import { execFileSync, execSync } from 'node:child_process'
@@ -102,5 +102,5 @@ for (const p of walk(work)) {
 	if (IMG.test(p) && !p.includes('_unzipped')) candidates.push({ path: p, source: '(toplevel)' })
 }
 
-writeFileSync(join(staging, 'candidates.json'), JSON.stringify(candidates, null, 1))
-console.log(`candidates: ${candidates.length} disk images -> ${join(staging, 'candidates.json')}`)
+writeFileSync(join(staging, `candidates-${label}.json`), JSON.stringify(candidates, null, 1))
+console.log(`candidates: ${candidates.length} disk images -> ${join(staging, `candidates-${label}.json`)}`)

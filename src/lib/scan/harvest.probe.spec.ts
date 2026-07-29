@@ -19,6 +19,8 @@ const RUN = process.env.DISKCHECK_HARVEST === '1'
 const corpusDir = join(import.meta.dirname, '..', '..', '..', '..', 'diskimages')
 const staging = join(corpusDir, '_staging')
 const LABEL = process.env.DISKCHECK_HARVEST_LABEL ?? 'axf1' // AxelF CDn; set per CD
+// Stage 1 writes candidates-<label>.json; override to classify an older trawl.
+const CANDIDATES = process.env.DISKCHECK_HARVEST_CANDIDATES ?? 'candidates.json'
 const OTHER_SAMPLE_EVERY = 50
 const OTHER_CAP = 20
 
@@ -39,7 +41,7 @@ function bootSha(bytes: Uint8Array): string | null {
 describe('corpus harvest stage 2', () => {
 	it('classifies candidates into diskimages/', () => {
 		if (!RUN) return
-		const candPath = join(staging, 'candidates.json')
+		const candPath = join(staging, CANDIDATES)
 		if (!existsSync(candPath)) return
 		const candidates = JSON.parse(readFileSync(candPath, 'utf8')) as
 			{ path: string; source: string }[]
