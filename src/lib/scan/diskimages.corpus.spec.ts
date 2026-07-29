@@ -11,7 +11,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { scanImage } from './scanner'
 
-const dir = join(import.meta.dirname, '..', '..', '..', 'diskimages')
+const dir = join(import.meta.dirname, '..', '..', '..', '..', 'diskimages')
 
 describe('diskimages corpus', () => {
 	it('classifies virus / protector / other images without silly false infections', () => {
