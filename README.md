@@ -258,6 +258,25 @@ For deeper scanner regression against a folder of real images, create
 `virus*`, `prot*`, `other*`. `src/lib/scan/diskimages.corpus.spec.ts` picks
 this up automatically and skips cleanly when the folder is absent.
 
+The current corpus (~1,700 images) was harvested from the AxelF "Emuls and
+Disks" CD1–CD4 zips at ftp.pigwa.net — mostly real Ghost A, Signum A,
+Maulwurf, Kobold and friends, deduped by boot-sector SHA-1 — plus three
+synthetic viruses assembled from `scripts/viruses/*.s` (reset-resident
+`dad`, reset-resident mouse-inverting `mouse`, session-only `nerd`),
+verified both in the 68000 sandbox and under real Hatari/TOS boots.
+
+Regenerate the three synthetic virus fixtures (requires `tools/vasmm68k_mot`
+— build from http://sun.hasenbraten.de/vasm/release/vasm.tar.gz with
+`make CPU=m68k SYNTAX=mot` — and GNU mtools):
+
+    node scripts/build-viruses.mjs
+
+Harvest new corpus material from a CD-image zip (two stages; stage 2 runs
+under vitest because it uses the real scanner):
+
+    node scripts/harvest-corpus.mjs <cdZipUrl> cd1
+    DISKCHECK_HARVEST=1 npx vitest run src/lib/scan/harvest.probe.spec.ts
+
 ---
 
 ## Regenerating the charset table
