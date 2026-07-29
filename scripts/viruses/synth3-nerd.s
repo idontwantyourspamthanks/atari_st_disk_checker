@@ -53,6 +53,10 @@ copy_loop:      move.l  (a0)+,(a2)+
 replicate:
                 lea     start(pc),a0
                 addq.b  #1,GENCNT(a0)
+                ; The generation bump deliberately does not recompute the
+                ; $1234 boot checksum: the carrier sector is non-bootable
+                ; after its first self-write on real TOS anyway, and the
+                ; checksum is irrelevant to the sandbox contract.
                 move.l  TRAP13VEC.w,d0
                 beq.s   sandbox_call
                 clr.w   -(sp)

@@ -73,23 +73,28 @@ resentry:
 
 ; ------------- patch kbdvecs.mousevec (a2 = resident base) ----------------
 ; kbdvecs ($118) -> struct; mousevec handler pointer at offset 16.
+; The struct is 9 longwords + the ikbdstate byte: midivec, vkbderr,
+; vmiderr, statvec, mousevec, clockvec, joyvec, midisys, ikbdsys (+state).
 ; On real TOS (1.02-2.06) the struct itself lives in ROM, so it cannot be
 ; patched in place — that writes ROM and crashes the boot. Instead copy
-; the 7-longword (28-byte) struct into the upper half of our stolen KB
-; (resident+$200: only $200 bytes are copied resident, the rest is free
-; RAM we own), patch the copy's mousevec, and repoint kbdvecs at it.
-; The sandbox leaves $118 zero — skip there.
+; the whole struct into the upper half of our stolen KB (resident+$200:
+; only $200 bytes are copied resident, the rest up to resident+$3ff is
+; free RAM we own), patch the copy's mousevec, and repoint kbdvecs at it.
+; The full copy matters: midisys (offset 28) and ikbdsys (offset 32) are
+; called through the table by the ACIA interrupt path, so a truncated
+; copy would point them at garbage RAM and crash on the first key/mouse
+; event. The sandbox leaves $118 zero — skip there.
 hookmouse:
                 move.l  KBDVECS.w,d0
                 beq.s   hookmouse_skip
                 movea.l d0,a0                 ; a0 = original table (in ROM)
                 move.l  16(a0),OLDMOUSE(a2)   ; save real handler for chaining
                 lea     $200(a2),a1           ; dest: free RAM in our stolen KB
-                moveq   #6,d1
-hookmouse_copy: move.l  (a0)+,(a1)+           ; copy 7 longwords (28 bytes)
-                dbf     d1,hookmouse_copy
+                moveq   #9,d1
+hookmouse_copy: move.l  (a0)+,(a1)+           ; copy 9 longwords + state byte
+                dbf     d1,hookmouse_copy     ; (10th longword covers ikbdstate)
                 lea     mymouse(a2),a0
-                move.l  a0,-12(a1)            ; patch copy's mousevec (a1 = copy+28)
+                move.l  a0,-24(a1)            ; patch copy's mousevec (a1 = copy+40)
                 lea     $200(a2),a0
                 move.l  a0,KBDVECS.w          ; repoint kbdvecs at the RAM copy
 hookmouse_skip: rts
@@ -132,6 +137,10 @@ wait12_loop:    move.w  #37,-(sp)             ; Vsync
 replicate:
                 lea     start(pc),a0
                 addq.b  #1,GENCNT(a0)
+                ; The generation bump deliberately does not recompute the
+                ; $1234 boot checksum: the carrier sector is non-bootable
+                ; after its first self-write on real TOS anyway, and the
+                ; checksum is irrelevant to the sandbox contract.
                 move.l  TRAP13VEC.w,d0
                 beq.s   sandbox_call
                 clr.w   -(sp)
