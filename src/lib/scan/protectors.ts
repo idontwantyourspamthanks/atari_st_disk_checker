@@ -240,6 +240,34 @@ export const PROTECTORS: readonly ProtectorSignature[] = Object.freeze([
 			'"The SHADOW ... VIRUS FREE" branding is XOR-encoded, so only the ' +
 			'plaintext warning is matchable.',
 	},
+	{
+		name: 'Killer Boot',
+		family: 'Killer Boot',
+		patterns: ['KILLER_BOOT'],
+		notes:
+			'Vaccine bootblock of The Killer antivirus by Emmanuel Collignon / ' +
+			'Omikron France (1989, UVK anti-virus #8). Reset-resident memory ' +
+			'checker; the MORT/ALEX strings are its whitelist footprints. Very ' +
+			'common on French compilation disks.',
+	},
+	{
+		name: 'B.U.S.T Anti-Virus Reset',
+		family: 'B.U.S.T',
+		patterns: ['NEVER FORGET-THE B.U.S.T', 'Anti-Virus Reset Installed'],
+		notes:
+			'"Anti-Virus Reset" — benevolent reset-resident program that wipes ' +
+			'viruses from memory on warm reset. Dated 19/1/90, "Done For THE ' +
+			'CLUB"; author undocumented.',
+	},
+	{
+		name: 'Adrenaline Preventor',
+		family: 'Preventor',
+		patterns: ['PREVENTOR', 'SOMETHING IN MEMORY!'],
+		notes:
+			'Adrenaline Anti-Virus Preventor (FirSTE & Dr Computer, 1992+). ' +
+			'Reset-resident guardian that self-replicates onto non-executable ' +
+			'bootsectors — a trojanized 1.8b mutation exists, so verify samples.',
+	},
 
 	// -- Generic catch-all (keep last so specific names also match) ---------
 	{
