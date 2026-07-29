@@ -73,15 +73,25 @@ resentry:
 
 ; ------------- patch kbdvecs.mousevec (a2 = resident base) ----------------
 ; kbdvecs ($118) -> struct; mousevec handler pointer at offset 16.
+; On real TOS (1.02-2.06) the struct itself lives in ROM, so it cannot be
+; patched in place — that writes ROM and crashes the boot. Instead copy
+; the 7-longword (28-byte) struct into the upper half of our stolen KB
+; (resident+$200: only $200 bytes are copied resident, the rest is free
+; RAM we own), patch the copy's mousevec, and repoint kbdvecs at it.
 ; The sandbox leaves $118 zero — skip there.
 hookmouse:
                 move.l  KBDVECS.w,d0
                 beq.s   hookmouse_skip
-                movea.l d0,a0
-                move.l  16(a0),OLDMOUSE(a2)
-                move.l  a2,d0
-                add.l   #mymouse,d0
-                move.l  d0,16(a0)
+                movea.l d0,a0                 ; a0 = original table (in ROM)
+                move.l  16(a0),OLDMOUSE(a2)   ; save real handler for chaining
+                lea     $200(a2),a1           ; dest: free RAM in our stolen KB
+                moveq   #6,d1
+hookmouse_copy: move.l  (a0)+,(a1)+           ; copy 7 longwords (28 bytes)
+                dbf     d1,hookmouse_copy
+                lea     mymouse(a2),a0
+                move.l  a0,-12(a1)            ; patch copy's mousevec (a1 = copy+28)
+                lea     $200(a2),a0
+                move.l  a0,KBDVECS.w          ; repoint kbdvecs at the RAM copy
 hookmouse_skip: rts
 
 ; ------------- mouse packet filter (resident, real TOS only) ---------------
