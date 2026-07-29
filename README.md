@@ -8,7 +8,7 @@ uploads — every byte stays on the machine you're browsing from.
 | **Files** | Render ST text and image formats (`.PI1`, `.NEO`, `.IFF`, …). Drop a `.ST`, `.MSA`, or `.STX` disk image to browse files inside it. |
 | **Scan** | Heuristic + signature boot-sector virus scanner for `.ST` / `.MSA` / `.STX` images, including ZIP batches. |
 
-The production build is a single self-contained `index.html` (~350 KB) that
+The production build is a single self-contained `index.html` (~390 KB) that
 runs from `file://` in any modern browser — no server required.
 
 ---
@@ -254,9 +254,37 @@ npm run gen:image-fixtures
 ### Optional local scanner corpus
 
 For deeper scanner regression against a folder of real images, create
-`diskimages/` at the repo root (gitignored). Name files by class:
+`diskimages/` one level above this repo — `../diskimages/` relative to
+`web/` (the specs resolve it from there; it sits outside the repo, so it
+is not covered by `.gitignore` and is never committed). Name files by class:
 `virus*`, `prot*`, `other*`. `src/lib/scan/diskimages.corpus.spec.ts` picks
 this up automatically and skips cleanly when the folder is absent.
+
+The current corpus (~1,700 images) was harvested from the AxelF "Emuls and
+Disks" CD1–CD4 zips at ftp.pigwa.net — mostly real Ghost A, Signum A,
+Maulwurf, Kobold and friends, deduped by boot-sector SHA-1 — plus three
+synthetic viruses assembled from `scripts/viruses/*.s` (reset-resident
+`dad`, reset-resident mouse-inverting `mouse`, session-only `nerd`),
+verified both in the 68000 sandbox and under real Hatari/TOS boots.
+
+Regenerate the three synthetic virus fixtures (requires `tools/vasmm68k_mot`
+— build from http://sun.hasenbraten.de/vasm/release/vasm.tar.gz with
+`make CPU=m68k SYNTAX=mot` — and GNU mtools):
+
+    node scripts/build-viruses.mjs
+
+Harvest new corpus material from a CD-image zip (two stages; stage 2 runs
+under vitest because it uses the real scanner):
+
+    node scripts/harvest-corpus.mjs <cdZipUrl> cd1
+    DISKCHECK_HARVEST=1 DISKCHECK_HARVEST_LABEL=axf1 \
+      DISKCHECK_HARVEST_CANDIDATES=candidates-cd1.json \
+      npx vitest run src/lib/scan/harvest.probe.spec.ts
+
+Stage 1 writes `diskimages/_staging/candidates-cd1.json`; stage 2 needs
+`DISKCHECK_HARVEST_CANDIDATES` pointing at that file (it silently skips
+otherwise) and `DISKCHECK_HARVEST_LABEL` for the kept-file prefixes
+(`axf1-0001`…) and `manifest-axf1.csv`.
 
 ---
 

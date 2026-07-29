@@ -35,3 +35,6 @@ npm-debug.log*
 
 # Optional local scanner corpus — not checked in; corpus test skips when absent
 diskimages/
+
+# Local build tools (vasm assembler, built from source)
+tools/
