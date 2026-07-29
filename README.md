@@ -8,7 +8,7 @@ uploads — every byte stays on the machine you're browsing from.
 | **Files** | Render ST text and image formats (`.PI1`, `.NEO`, `.IFF`, …). Drop a `.ST`, `.MSA`, or `.STX` disk image to browse files inside it. |
 | **Scan** | Heuristic + signature boot-sector virus scanner for `.ST` / `.MSA` / `.STX` images, including ZIP batches. |
 
-The production build is a single self-contained `index.html` (~350 KB) that
+The production build is a single self-contained `index.html` (~390 KB) that
 runs from `file://` in any modern browser — no server required.
 
 ---
@@ -275,7 +275,14 @@ Harvest new corpus material from a CD-image zip (two stages; stage 2 runs
 under vitest because it uses the real scanner):
 
     node scripts/harvest-corpus.mjs <cdZipUrl> cd1
-    DISKCHECK_HARVEST=1 npx vitest run src/lib/scan/harvest.probe.spec.ts
+    DISKCHECK_HARVEST=1 DISKCHECK_HARVEST_LABEL=axf1 \
+      DISKCHECK_HARVEST_CANDIDATES=candidates-cd1.json \
+      npx vitest run src/lib/scan/harvest.probe.spec.ts
+
+Stage 1 writes `diskimages/_staging/candidates-cd1.json`; stage 2 needs
+`DISKCHECK_HARVEST_CANDIDATES` pointing at that file (it silently skips
+otherwise) and `DISKCHECK_HARVEST_LABEL` for the kept-file prefixes
+(`axf1-0001`…) and `manifest-axf1.csv`.
 
 ---
 
