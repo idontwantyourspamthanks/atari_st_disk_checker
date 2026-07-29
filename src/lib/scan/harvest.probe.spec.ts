@@ -18,7 +18,7 @@ import { scanImage } from './scanner'
 const RUN = process.env.DISKCHECK_HARVEST === '1'
 const corpusDir = join(import.meta.dirname, '..', '..', '..', '..', 'diskimages')
 const staging = join(corpusDir, '_staging')
-const LABEL = 'axf1' // AxelF CD1; bump per CD
+const LABEL = process.env.DISKCHECK_HARVEST_LABEL ?? 'axf1' // AxelF CDn; set per CD
 const OTHER_SAMPLE_EVERY = 50
 const OTHER_CAP = 20
 
@@ -103,7 +103,7 @@ describe('corpus harvest stage 2', () => {
 			manifest.push(`"${file}",${cls},${report.status},"${findings}",${sha},"${c.source.replace(/"/g, "'")}"`)
 		}
 
-		writeFileSync(join(staging, 'manifest.csv'), manifest.join('\n') + '\n')
+		writeFileSync(join(staging, `manifest-${LABEL}.csv`), manifest.join('\n') + '\n')
 		console.log('harvest:', JSON.stringify(counts), `kept=${kept}`)
 		// Sanity: whatever we kept must not break the corpus contract.
 		expect(kept).toBeGreaterThan(0)
