@@ -526,6 +526,29 @@ export const SIGNATURES: readonly Signature[] = Object.freeze([
 		patterns: [{ kind: 'ascii', text: 'Nightmare of Brooklyn' }],
 		confidence: 'verified',
 	},
+
+	// ── Fungus — uncatalogued specimen from the AxelF CD3 trawl ──────────
+	{
+		name: 'Fungus', family: 'Fungus',
+		origin: 'Unknown (specimen from a 1990s French compilation)',
+		payload: 'Mouse interference every 5th infection; reset-proof hdv_bpb infector',
+		patterns: [
+			// Self-name in the OEM field ($02) — require the viral body too,
+			// so the string alone can never false-positive.
+			{ kind: 'ascii', text: 'Fungus' },
+			// MOVE.L #$3141592E,D0 at $34 — its pi+8 variant resvalid magic.
+			{ kind: 'bytes', offset: 0x34, bytes: w(0x20, 0x3C, 0x31, 0x41, 0x59, 0x2E) },
+		],
+		match: 'all',
+		confidence: 'verified',
+		notes:
+			'Previously uncatalogued — not in UVK 2000 or retrovirology.ca; identified by ' +
+			'DiskCheck sandbox forensics (2026). Ghost-family techniques with own twists: ' +
+			'resvalid/resvector via a pi+8 magic ($3141592E), $12123456 residency marker ' +
+			'under phystop, Floprd/Flopwr self-copy with checksum re-tuning, generation ' +
+			'counter, hardcoded TOS 1.0x ROM chain. The corpus specimen was neutralized ' +
+			'in place (entry byte flipped $60->$00) and correctly reports immunized.',
+	},
 ])
 
 // ── Matcher ─────────────────────────────────────────────────────────────────

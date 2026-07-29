@@ -230,6 +230,16 @@ export const PROTECTORS: readonly ProtectorSignature[] = Object.freeze([
 		family: 'DTB',
 		patterns: ['V-DETECT', 'Dirty Tricks'],
 	},
+	{
+		name: 'Shadow Anti-Virus',
+		family: 'Shadow',
+		patterns: ['RESET-PROOF PROGRAM', 'Switch off for 5 seconds then re-boot'],
+		notes:
+			'Shadow of the Dynamic Duo, England (UVK anti-virus #15, July 1990). ' +
+			'Warns when a reset-resident program is in memory; its own ' +
+			'"The SHADOW ... VIRUS FREE" branding is XOR-encoded, so only the ' +
+			'plaintext warning is matchable.',
+	},
 
 	// -- Generic catch-all (keep last so specific names also match) ---------
 	{
