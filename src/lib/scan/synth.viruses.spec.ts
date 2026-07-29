@@ -46,4 +46,24 @@ describe('synthesized bootsector viruses', () => {
 		expect(r.hooks).toContain('hdv_bpb')
 		expect(r.bootWrites.length).toBeGreaterThan(0)
 	})
+
+	it('mouse: reset-resident, propagating, hooks mouse vector, no message', () => {
+		if (!existsSync(join(dir, MOUSE))) return
+		const { report, boot } = load(MOUSE)
+
+		expect(report.bootSectorChecksum).toBe(0x1234)
+		expect(report.status).toBe('suspicious')
+		const names = report.findings.map(f => f.name)
+		expect(names).toContain('Sandbox: reset-proof install')
+		expect(names).toContain('Sandbox: system vector hook')
+		expect(names).toContain('Sandbox: boot-sector write attempt')
+		expect(bootText(boot)).not.toContain('woz ere')
+
+		const r = runBootSandbox(boot)
+		expect(['return', 'loop', 'limit']).toContain(r.haltReason)
+		expect(r.resetProofMagic).toBe(true)
+		expect(r.resetProofVector).toBe(true)
+		expect(r.hooks).toContain('hdv_bpb')
+		expect(r.bootWrites.length).toBeGreaterThan(0)
+	})
 })
