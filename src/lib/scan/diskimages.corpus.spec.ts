@@ -4,7 +4,8 @@
  *   prot*   → expect protected (named protector), not a false virus infection
  *   other*  → must NOT be infected
  *
- * Skips cleanly when the folder is absent (CI without the corpus).
+ * Skips cleanly when the folder is absent (CI without the corpus); set
+ * DISKCHECK_REQUIRE_CORPUS=1 to fail loudly instead of skipping.
  */
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
@@ -15,7 +16,12 @@ const dir = join(import.meta.dirname, '..', '..', '..', '..', 'diskimages')
 
 describe('diskimages corpus', () => {
 	it('classifies virus / protector / other images without silly false infections', () => {
-		if (!existsSync(dir)) return
+		if (!existsSync(dir)) {
+			if (process.env.DISKCHECK_REQUIRE_CORPUS === '1') {
+				throw new Error(`DISKCHECK_REQUIRE_CORPUS=1 but corpus dir is missing: ${dir}`)
+			}
+			return
+		}
 
 		const files = readdirSync(dir).filter(f => /\.(st|msa|stx)$/i.test(f)).sort()
 		expect(files.length).toBeGreaterThan(10)

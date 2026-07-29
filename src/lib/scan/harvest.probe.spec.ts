@@ -5,7 +5,16 @@
  *
  * Gated: only runs when DISKCHECK_HARVEST=1 — plain `npm test` skips.
  *
- *   DISKCHECK_HARVEST=1 npx vitest run src/lib/scan/harvest.probe.spec.ts
+ *   node scripts/harvest-corpus.mjs <cdZipUrl> cd1   # stage 1: writes
+ *                                                    # _staging/candidates-cd1.json
+ *   DISKCHECK_HARVEST=1 DISKCHECK_HARVEST_LABEL=axf1 \
+ *     DISKCHECK_HARVEST_CANDIDATES=candidates-cd1.json \
+ *     npx vitest run src/lib/scan/harvest.probe.spec.ts
+ *
+ * DISKCHECK_HARVEST_CANDIDATES must point at the stage-1 output; the
+ * default candidates.json matches nothing and stage 2 silently no-ops.
+ * DISKCHECK_HARVEST_LABEL sets the kept-file prefixes (axf1-0001…)
+ * and manifest-<label>.csv.
  */
 import { describe, it, expect } from 'vitest'
 import {

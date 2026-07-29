@@ -254,7 +254,9 @@ npm run gen:image-fixtures
 ### Optional local scanner corpus
 
 For deeper scanner regression against a folder of real images, create
-`diskimages/` at the repo root (gitignored). Name files by class:
+`diskimages/` one level above this repo — `../diskimages/` relative to
+`web/` (the specs resolve it from there; it sits outside the repo, so it
+is not covered by `.gitignore` and is never committed). Name files by class:
 `virus*`, `prot*`, `other*`. `src/lib/scan/diskimages.corpus.spec.ts` picks
 this up automatically and skips cleanly when the folder is absent.
 

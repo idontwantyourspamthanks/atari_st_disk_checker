@@ -1,7 +1,8 @@
 /**
  * Synthesized bootsector viruses — web/scripts/viruses/*.s built by
  * web/scripts/build-viruses.mjs into the gitignored diskimages/ corpus.
- * Skips cleanly when the images have not been built.
+ * Skips cleanly when the images have not been built; set
+ * DISKCHECK_REQUIRE_CORPUS=1 to fail loudly instead of skipping.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
@@ -16,6 +17,14 @@ export const DAD = 'virus synth 1 dad.st'
 export const MOUSE = 'virus synth 2 mouse.st'
 export const NERD = 'virus synth 3 nerd.st'
 
+function present(path: string): boolean {
+	const ok = existsSync(path)
+	if (!ok && process.env.DISKCHECK_REQUIRE_CORPUS === '1') {
+		throw new Error(`DISKCHECK_REQUIRE_CORPUS=1 but corpus file is missing: ${path}`)
+	}
+	return ok
+}
+
 function load(name: string) {
 	const bytes = new Uint8Array(readFileSync(join(dir, name)))
 	return { bytes, report: scanImage(bytes, name), boot: getBootSector(bytes) }
@@ -27,7 +36,7 @@ function bootText(boot: Uint8Array): string {
 
 describe('synthesized bootsector viruses', () => {
 	it('dad: reset-resident, propagating, prints its message', () => {
-		if (!existsSync(join(dir, DAD))) return
+		if (!present(join(dir, DAD))) return
 		const { report, boot } = load(DAD)
 
 		expect(report.bootSectorChecksum).toBe(0x1234)
@@ -48,7 +57,7 @@ describe('synthesized bootsector viruses', () => {
 	})
 
 	it('mouse: reset-resident, propagating, hooks mouse vector, no message', () => {
-		if (!existsSync(join(dir, MOUSE))) return
+		if (!present(join(dir, MOUSE))) return
 		const { report, boot } = load(MOUSE)
 
 		expect(report.bootSectorChecksum).toBe(0x1234)
@@ -68,7 +77,7 @@ describe('synthesized bootsector viruses', () => {
 	})
 
 	it('nerd: propagates in-session but does NOT survive reset', () => {
-		if (!existsSync(join(dir, NERD))) return
+		if (!present(join(dir, NERD))) return
 		const { report, boot } = load(NERD)
 
 		expect(report.bootSectorChecksum).toBe(0x1234)
