@@ -159,6 +159,12 @@ diskcheck/
 
 Share that zip as-is. Recipients do not need Node.js.
 
+### Releases
+
+Every push to `master` runs `.github/workflows/dist-release.yml`: it runs
+the tests, builds the zip, and attaches it to a new GitHub release tagged
+`dist-<run-id>`. Download the latest zip from the repo's Releases page.
+
 ---
 
 ## Deploy remotely

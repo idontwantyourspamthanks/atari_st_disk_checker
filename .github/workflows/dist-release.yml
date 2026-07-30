@@ -1,0 +1,37 @@
+# Build the self-contained distribution zip and attach it to a GitHub
+# release on every push to master. Tag scheme: dist-<date>-r<run number>.
+name: dist-release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run zip   # builds dist/ and writes diskcheck-dist-<timestamp>.zip
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dist-${{ github.run_id }}
+          name: dist ${{ github.run_number }} — ${{ github.sha }}
+          body: |
+            Automated build of DiskCheck from ${{ github.sha }}.
+            Unzip and open `diskcheck/index.html` in any modern browser — no
+            server, no install.
+          files: diskcheck-dist-*.zip
+          fail_on_unmatched_files: true
