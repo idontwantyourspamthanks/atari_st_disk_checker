@@ -52,7 +52,14 @@ function baseBoot(): Uint8Array {
 
 function loadVirus(name: string): Uint8Array | null {
 	const path = `${DISKIMAGES}/${name}`
-	if (!existsSync(path)) return null
+	if (!existsSync(path)) {
+		// Corpus is optional (CI without diskimages/) — but fail loudly when
+		// a machine is expected to have it.
+		if (process.env.DISKCHECK_REQUIRE_CORPUS === '1') {
+			throw new Error(`corpus image missing: ${name}`)
+		}
+		return null
+	}
 	return getBootSector(new Uint8Array(readFileSync(path)))
 }
 
@@ -73,10 +80,7 @@ describe('runBootSandbox', () => {
 
 	it('observes Ghost A installing reset-proof residency + hdv_bpb', function () {
 		const boot = loadVirus('virus ghost a 0706 Copia MONKEY1.st')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 
 		const result = runBootSandbox(boot)
 		expect(result.haltReason).toBe('return')
@@ -88,10 +92,7 @@ describe('runBootSandbox', () => {
 
 	it('observes Finland (zero-disguise entry) installing reset-proof + hdv_bpb', function () {
 		const boot = loadVirus('virus finland virus H013.MSA')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 
 		const result = runBootSandbox(boot)
 		expect(result.haltReason).toBe('return')
@@ -102,10 +103,7 @@ describe('runBootSandbox', () => {
 
 	it('observes Goblin installing reset-proof residency + hdv_bpb', function () {
 		const boot = loadVirus('virus goblin a H456.MSA')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 
 		const result = runBootSandbox(boot)
 		expect(result.haltReason).toBe('return')
@@ -116,10 +114,7 @@ describe('runBootSandbox', () => {
 
 	it('observes Signum hooking hdv_bpb', function () {
 		const boot = loadVirus('virus signum pbl a H087.MSA')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 
 		const result = runBootSandbox(boot)
 		expect(result.haltReason).toBe('return')
@@ -128,10 +123,7 @@ describe('runBootSandbox', () => {
 
 	it('finds Goblin signature in relocated RAM after sandbox run', function () {
 		const boot = loadVirus('virus goblin a H456.MSA')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 		const result = runBootSandbox(boot)
 		expect(result.memorySignatures.some(h => h.name === 'Goblin')).toBe(true)
 		expect(result.memorySignatures.some(h => h.windowBase !== 0x4000)).toBe(true)
@@ -139,10 +131,7 @@ describe('runBootSandbox', () => {
 
 	it('runs the Demoniak Trace-bit bootblock without unsupported opcodes', function () {
 		const boot = loadVirus('prot fuck to regis demoniak H327.MSA')
-		if (!boot) {
-			this.skip()
-			return
-		}
+		if (!boot) return // corpus absent — skip (DISKCHECK_REQUIRE_CORPUS=1 fails instead)
 		const result = runBootSandbox(boot)
 		expect(result.haltReason).not.toBe('unsupported')
 		expect(result.haltReason).not.toBe('error')
